@@ -4,8 +4,8 @@
   "description": "Real-time AI-powered voice search using Gemini Live API",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js"
+    "start": "node api/index.js",
+    "dev": "node --watch api/index.js"
   },
   "dependencies": {
     "@google/genai": "^1.0.0",
