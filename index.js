@@ -36,6 +36,10 @@ Cleaned:`;
 app.use(express.static(path.join(__dirname)));
 app.use(express.json());
 
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+
 // ─── Clean endpoint ───────────────────────────────────────────────────────────
 app.post('/api/clean', async (req, res) => {
   const { query } = req.body ?? {};
