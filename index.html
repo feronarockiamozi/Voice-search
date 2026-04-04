@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <title>OZi — Voice Search</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Nunito:wght@800;900&display=swap" rel="stylesheet" />
+
+  <style>
+    /* ── Variables ───────────────────────────────────────────────── */
+    :root {
+      --pink:       #b52b5c;
+      --pink-deep:  #8f1f47;
+      --pink-hover: #c93168;
+      --pink-bg:    #f9e0eb;
+      --pink-light: #fdf3f7;
+      --pink-card:  #fce8f1;
+      --white:      #ffffff;
+      --text:       #1e1530;
+      --text-2:     #6d5470;
+      --text-3:     #aa8fb0;
+      --border:     rgba(181,43,92,0.13);
+      --shadow-sm:  0 2px 12px rgba(181,43,92,0.10);
+      --shadow-md:  0 6px 28px rgba(181,43,92,0.16);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: var(--pink-light);
+      color: var(--text);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── STICKY HEADER ───────────────────────────────────────────── */
+    .site-header {
+      position: sticky;
+      top: 0;
+      z-index: 200;
+      background: var(--white);
+      border-bottom: 1px solid var(--border);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .header-inner {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 11px 20px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .logo {
+      font-family: 'Nunito', sans-serif;
+      font-weight: 900;
+      font-size: 1.75rem;
+      color: var(--pink);
+      letter-spacing: -0.03em;
+      line-height: 1;
+      flex-shrink: 0;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    /* Compact search bar — shown only after a search */
+    .header-bar {
+      flex: 1;
+      max-width: 540px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--pink-bg);
+      border: 1.5px solid var(--border);
+      border-radius: 50px;
+      padding: 7px 10px 7px 16px;
+      visibility: hidden;
+      opacity: 0;
+      transform: translateY(-6px);
+      transition: opacity 0.3s ease, transform 0.3s ease, visibility 0.3s;
+      pointer-events: none;
+    }
+    .header-bar.visible {
+      visibility: visible;
+      opacity: 1;
+      transform: none;
+      pointer-events: all;
+    }
+
+    .header-bar input {
+      flex: 1;
+      border: none;
+      background: none;
+      font-family: 'Inter', sans-serif;
+      font-size: 0.88rem;
+      color: var(--text);
+      outline: none;
+      cursor: pointer;
+      min-width: 0;
+    }
+    .header-bar input::placeholder { color: var(--text-3); }
+
+    .header-bar-mic {
+      width: 32px; height: 32px;
+      border: 1.5px solid var(--pink);
+      border-radius: 50%;
+      background: transparent;
+      color: var(--pink);
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      transition: background 0.2s, transform 0.15s;
+    }
+    .header-bar-mic:hover { background: var(--pink); color: white; transform: scale(1.1); }
+
+    /* ── HERO (centered search — initial state) ──────────────────── */
+    .hero {
+      background: linear-gradient(155deg, #f7d8e8 0%, #fce9f3 45%, #fdf5f9 100%);
+      padding: 80px 20px 88px;
+      text-align: center;
+      transition: max-height 0.55s cubic-bezier(0.4,0,0.2,1),
+                  padding    0.55s cubic-bezier(0.4,0,0.2,1),
+                  opacity    0.35s ease;
+      max-height: 1000px;
+      overflow: hidden;
+    }
+
+    .hero.collapsed {
+      max-height: 0;
+      padding-top: 0;
+      padding-bottom: 0;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .hero-logo {
+      font-family: 'Nunito', sans-serif;
+      font-weight: 900;
+      font-size: clamp(3rem, 10vw, 5rem);
+      color: var(--pink);
+      letter-spacing: -0.04em;
+      line-height: 1;
+      margin-bottom: 6px;
+    }
+
+    .hero-sub {
+      font-size: 0.95rem;
+      color: var(--text-2);
+      font-weight: 500;
+      margin-bottom: 36px;
+      letter-spacing: 0.01em;
+    }
+
+    /* Hero search pill */
+    .hero-pill {
+      max-width: 600px;
+      margin: 0 auto;
+      background: var(--white);
+      border: 1.5px solid var(--border);
+      border-radius: 50px;
+      padding: 10px 10px 10px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      box-shadow: var(--shadow-md);
+      transition: border-color 0.25s, box-shadow 0.25s;
+    }
+    .hero-pill:focus-within { border-color: var(--pink); box-shadow: 0 8px 36px rgba(181,43,92,0.22); }
+    .hero-pill.listening    { border-color: var(--pink); box-shadow: 0 8px 36px rgba(181,43,92,0.22), 0 0 0 4px rgba(181,43,92,0.08); animation: pillPulse 2s ease-in-out infinite; }
+
+    @keyframes pillPulse {
+      0%,100% { box-shadow: 0 8px 36px rgba(181,43,92,0.2); }
+      50%      { box-shadow: 0 8px 44px rgba(181,43,92,0.38); }
+    }
+
+    .search-lupe { color: var(--text-3); flex-shrink: 0; transition: color 0.2s; }
+    .hero-pill.listening .search-lupe { color: var(--pink); }
+
+    #searchInput {
+      flex: 1;
+      border: none; background: none;
+      font-family: 'Inter', sans-serif;
+      font-size: 1rem; color: var(--text);
+      outline: none; min-width: 0;
+      caret-color: var(--pink);
+    }
+    #searchInput::placeholder { color: var(--text-3); }
+
+    /* Mic button */
+    #micBtn {
+      position: relative;
+      width: 46px; height: 46px;
+      border: none; border-radius: 50%;
+      background: var(--pink);
+      color: #fff; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      transition: transform 0.18s, box-shadow 0.18s, background 0.2s;
+      box-shadow: 0 3px 14px rgba(181,43,92,0.45);
+      outline: none; overflow: visible;
+    }
+    #micBtn:hover:not(:disabled) { transform: scale(1.08); box-shadow: 0 5px 22px rgba(181,43,92,0.55); }
+    #micBtn:active:not(:disabled) { transform: scale(0.94); }
+    #micBtn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    #micBtn.recording {
+      background: #d91a4a;
+      animation: recPulse 1.8s ease-in-out infinite;
+    }
+    #micBtn.recording::before, #micBtn.recording::after {
+      content: ''; position: absolute; inset: 0;
+      border-radius: 50%; background: #d91a4a;
+      z-index: -1; animation: ripple 1.8s ease-out infinite;
+    }
+    #micBtn.recording::after { animation-delay: 0.65s; }
+    #micBtn.processing { animation: hueRot 1.2s linear infinite; }
+
+    @keyframes recPulse { 0%,100%{ box-shadow:0 3px 14px rgba(217,26,74,0.45) } 50%{ box-shadow:0 5px 30px rgba(217,26,74,0.75) } }
+    @keyframes ripple   { 0%{ transform:scale(1); opacity:0.5 } 100%{ transform:scale(2.4); opacity:0 } }
+    @keyframes hueRot   { to{ filter:hue-rotate(360deg) } }
+
+    .i-mic, .i-stop, .i-spin { display: none; pointer-events: none; }
+    #micBtn.idle       .i-mic  { display: block; }
+    #micBtn.recording  .i-stop { display: block; }
+    #micBtn.processing .i-spin { display: block; }
+
+    /* ── STATUS ──────────────────────────────────────────────────── */
+    .status-row {
+      display: flex; align-items: center; justify-content: center;
+      gap: 7px; margin-top: 14px; min-height: 26px;
+    }
+    .sdot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--text-3);
+      transition: background 0.3s, box-shadow 0.3s;
+    }
+    .s-ready      .sdot { background: #10b981; box-shadow: 0 0 7px #10b981; }
+    .s-listening  .sdot { background: var(--pink); box-shadow: 0 0 7px var(--pink); animation: blink 1s ease-in-out infinite; }
+    .s-processing .sdot { background: #f59e0b; box-shadow: 0 0 7px #f59e0b; animation: blink 0.6s ease-in-out infinite; }
+    .s-error      .sdot { background: #ef4444; }
+
+    @keyframes blink { 0%,100%{ opacity:1 } 50%{ opacity:0.2 } }
+
+    #statusText { font-size: 0.78rem; font-weight: 500; color: var(--text-2); }
+    .s-listening  #statusText { color: var(--pink); }
+    .s-processing #statusText { color: #d97706; }
+    .s-error      #statusText { color: #dc2626; }
+
+    /* ── WAVEFORM ─────────────────────────────────────────────────── */
+    .wave-area {
+      max-width: 600px; margin: 16px auto 0;
+      height: 46px; opacity: 0;
+      transition: opacity 0.3s;
+    }
+    .wave-area.on { opacity: 1; }
+
+    .wave-bars {
+      display: flex; align-items: flex-end; justify-content: center;
+      gap: 3px; height: 100%;
+    }
+    .wave-bars span {
+      display: inline-block; width: 4px; border-radius: 2px;
+      background: linear-gradient(to top, var(--pink), #f47faa);
+      transform-origin: bottom;
+      animation: barDance 1.1s ease-in-out infinite;
+    }
+    .wave-bars span:nth-child(2n)  { animation-duration: 0.85s;  }
+    .wave-bars span:nth-child(3n)  { animation-duration: 1.35s;  }
+    .wave-bars span:nth-child(4n)  { animation-duration: 0.95s;  }
+
+    @keyframes barDance {
+      0%,100% { transform: scaleY(0.2); opacity: 0.45; }
+      50%      { transform: scaleY(1);   opacity: 1; }
+    }
+
+    /* ── INTERIM PILL ─────────────────────────────────────────────── */
+    .interim-wrap { max-width: 600px; margin: 12px auto 0; min-height: 28px; text-align: center; }
+    .interim-pill {
+      display: none; align-items: center; gap: 6px;
+      background: rgba(181,43,92,0.08); border: 1px solid rgba(181,43,92,0.15);
+      border-radius: 20px; padding: 5px 14px;
+      font-size: 0.8rem; color: var(--pink-deep); font-style: italic;
+      line-height: 1.4;
+    }
+    .interim-pill.on { display: inline-flex; }
+
+    /* ── HINT CHIPS ───────────────────────────────────────────────── */
+    .hints { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 22px; }
+    .chip {
+      font-size: 0.77rem; font-weight: 500;
+      color: var(--pink-deep);
+      background: rgba(181,43,92,0.07);
+      border: 1px solid rgba(181,43,92,0.15);
+      border-radius: 20px; padding: 6px 15px;
+      cursor: pointer; user-select: none;
+      transition: background 0.18s, border-color 0.18s;
+    }
+    .chip:hover { background: rgba(181,43,92,0.14); border-color: rgba(181,43,92,0.28); }
+
+    /* ── ERROR BANNER ─────────────────────────────────────────────── */
+    .err-banner {
+      display: none; align-items: center; gap: 10px;
+      background: #fff1f2; border: 1px solid #fecdd3;
+      border-radius: 12px; padding: 11px 16px;
+      max-width: 600px; margin: 14px auto 0;
+      font-size: 0.82rem; color: #be123c;
+    }
+    .err-banner.on { display: flex; }
+
+    /* ── RESULTS AREA ─────────────────────────────────────────────── */
+    .results-section {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 28px 20px 72px;
+      display: none;
+    }
+    .results-section.on {
+      display: block;
+      animation: fadeUp 0.4s ease both;
+    }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(18px); }
+      to   { opacity: 1; transform: none; }
+    }
+
+    .results-topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 18px; gap: 10px; flex-wrap: wrap;
+    }
+    .results-label { font-size: 0.72rem; font-weight: 700; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.09em; }
+    .results-meta  { font-size: 0.82rem; font-weight: 600; color: var(--pink); }
+
+    .new-search-btn {
+      border: 1.5px solid var(--pink); background: transparent; color: var(--pink);
+      border-radius: 20px; padding: 6px 16px; font-size: 0.78rem; font-weight: 600;
+      font-family: 'Inter', sans-serif; cursor: pointer;
+      display: flex; align-items: center; gap: 7px;
+      transition: background 0.2s, color 0.2s;
+      margin-left: auto;
+    }
+    .new-search-btn:hover { background: var(--pink); color: white; }
+
+    /* ── PRODUCT GRID ─────────────────────────────────────────────── */
+    .product-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+      gap: 14px;
+    }
+
+    .product-card {
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      overflow: hidden;
+      cursor: pointer;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+      animation: cardIn 0.36s ease both;
+    }
+    .product-card:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 14px 36px rgba(181,43,92,0.15);
+    }
+
+    @keyframes cardIn {
+      from { opacity: 0; transform: translateY(14px); }
+      to   { opacity: 1; transform: none; }
+    }
+
+    .card-img {
+      width: 100%; aspect-ratio: 1 / 1;
+      background: var(--pink-card);
+      overflow: hidden;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .card-img img {
+      width: 100%; height: 100%; object-fit: cover;
+      transition: transform 0.35s ease;
+    }
+    .product-card:hover .card-img img { transform: scale(1.07); }
+    .card-img-ph { font-size: 2.5rem; opacity: 0.35; }
+
+    .card-body { padding: 12px; }
+    .c-brand {
+      font-size: 0.63rem; font-weight: 700;
+      color: var(--pink); text-transform: uppercase;
+      letter-spacing: 0.07em; margin-bottom: 4px;
+    }
+    .c-name {
+      font-size: 0.81rem; font-weight: 600; color: var(--text);
+      line-height: 1.35;
+      display: -webkit-box; -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .c-stars { font-size: 0.67rem; color: #f59e0b; margin-top: 5px; }
+    .c-price { font-size: 0.88rem; font-weight: 700; color: var(--pink); margin-top: 7px; }
+
+    /* ── SKELETON ─────────────────────────────────────────────────── */
+    .skel-card { background: var(--white); border: 1px solid var(--border); border-radius: 18px; overflow: hidden; }
+    .skel      { background: var(--pink-bg); border-radius: 8px; animation: shimmer 1.4s ease-in-out infinite; }
+    .skel-sq   { width: 100%; aspect-ratio: 1; border-radius: 0; }
+    .skel-body { padding: 12px; }
+    .skel-l    { height: 10px; margin-bottom: 6px; }
+    .skel-l.w60 { width: 60%; }
+    .skel-l.w80 { width: 80%; }
+    .skel-l.w45 { width: 45%; }
+
+    @keyframes shimmer { 0%,100%{ opacity:0.45 } 50%{ opacity:1 } }
+
+    .no-results { grid-column: 1/-1; text-align: center; padding: 40px 20px; color: var(--text-2); font-size: 0.92rem; line-height: 1.7; }
+
+    /* ── MOBILE ───────────────────────────────────────────────────── */
+    @media (max-width: 600px) {
+      .hero { padding: 56px 16px 64px; }
+      .hero-sub { margin-bottom: 28px; }
+      .product-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+      .results-section { padding: 20px 12px 56px; }
+      .header-inner { padding: 10px 16px; }
+      .hero-pill { padding: 8px 8px 8px 16px; }
+    }
+    @media (max-width: 380px) {
+      .hints .chip { font-size: 0.72rem; padding: 5px 11px; }
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- ──────────────── STICKY HEADER ──────────────────────────── -->
+  <header class="site-header">
+    <div class="header-inner">
+
+      <div class="logo" id="logoBtn">OZi</div>
+
+      <!-- Compact bar — hidden until after first search -->
+      <div class="header-bar" id="headerBar">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+        </svg>
+        <input type="text" id="headerInput" placeholder="Search OZi…" readonly />
+        <button class="header-bar-mic" id="headerMicBtn" title="New voice search">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 1a4 4 0 0 1 4 4v7a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm0 2a2 2 0 0 0-2 2v7a2 2 0 0 0 4 0V5a2 2 0 0 0-2-2z"/>
+            <path d="M19 12a7 7 0 0 1-14 0H3a9 9 0 0 0 8 8.94V23h2v-2.06A9 9 0 0 0 21 12h-2z"/>
+          </svg>
+        </button>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- ──────────────── HERO (initial search state) ─────────────── -->
+  <section class="hero" id="hero">
+
+    <div class="hero-logo">OZi</div>
+    <p class="hero-sub">Voice-powered shopping for your little ones.</p>
+
+    <!-- Search pill -->
+    <div class="hero-pill" id="heroPill">
+      <svg class="search-lupe" width="18" height="18" viewBox="0 0 24 24"
+           fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+      </svg>
+
+      <input id="searchInput" type="text"
+             placeholder='Try "school bag" or tap the mic…'
+             autocomplete="off" spellcheck="false" />
+
+      <button id="micBtn" class="idle" aria-label="Voice search">
+        <!-- Mic icon -->
+        <svg class="i-mic" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 1a4 4 0 0 1 4 4v7a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm0 2a2 2 0 0 0-2 2v7a2 2 0 0 0 4 0V5a2 2 0 0 0-2-2z"/>
+          <path d="M19 12a7 7 0 0 1-14 0H3a9 9 0 0 0 8 8.94V23h2v-2.06A9 9 0 0 0 21 12h-2z"/>
+        </svg>
+        <!-- Stop icon -->
+        <svg class="i-stop" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+          <rect x="4" y="4" width="16" height="16" rx="3"/>
+        </svg>
+        <!-- Spinner -->
+        <svg class="i-spin" width="16" height="16" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+          <path d="M21 12a9 9 0 1 1-9-9">
+            <animateTransform attributeName="transform" type="rotate"
+              from="0 12 12" to="360 12 12" dur="0.9s" repeatCount="indefinite"/>
+          </path>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Status -->
+    <div class="status-row s-ready" id="statusRow">
+      <div class="sdot"></div>
+      <span id="statusText">Tap the mic and speak</span>
+    </div>
+
+    <!-- Waveform (CSS animated bars) -->
+    <div class="wave-area" id="waveArea">
+      <div class="wave-bars" id="waveBars">
+        <span style="height:12px"></span><span style="height:24px"></span>
+        <span style="height:36px"></span><span style="height:46px"></span>
+        <span style="height:30px"></span><span style="height:40px"></span>
+        <span style="height:22px"></span><span style="height:36px"></span>
+        <span style="height:16px"></span><span style="height:28px"></span>
+        <span style="height:42px"></span><span style="height:20px"></span>
+        <span style="height:34px"></span><span style="height:14px"></span>
+        <span style="height:26px"></span><span style="height:38px"></span>
+        <span style="height:18px"></span><span style="height:32px"></span>
+      </div>
+    </div>
+
+    <!-- Live interim transcript -->
+    <div class="interim-wrap">
+      <span class="interim-pill" id="interimPill">
+        <span id="interimText"></span>
+      </span>
+    </div>
+
+    <!-- Hint chips -->
+    <div class="hints">
+      <span class="chip" onclick="tryChip('running shoes')">running shoes</span>
+      <span class="chip" onclick="tryChip('toys for 3 year old')">toys for 3 year old</span>
+      <span class="chip" onclick="tryChip('school bag')">school bag</span>
+      <span class="chip" onclick="tryChip('baby care')">baby care</span>
+      <span class="chip" onclick="tryChip('winter jacket kids')">winter jacket kids</span>
+    </div>
+
+    <!-- Error banner -->
+    <div class="err-banner" id="errBanner">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+      </svg>
+      <span id="errText"></span>
+    </div>
+
+  </section>
+
+  <!-- ──────────────── RESULTS ──────────────────────────────────── -->
+  <section class="results-section" id="resultsSection">
+    <div class="results-topbar">
+      <div>
+        <div class="results-label">Search results</div>
+        <div class="results-meta" id="resultsMeta"></div>
+      </div>
+      <button class="new-search-btn" id="newSearchBtn">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 1a4 4 0 0 1 4 4v7a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm0 2a2 2 0 0 0-2 2v7a2 2 0 0 0 4 0V5a2 2 0 0 0-2-2z"/>
+          <path d="M19 12a7 7 0 0 1-14 0H3a9 9 0 0 0 8 8.94V23h2v-2.06A9 9 0 0 0 21 12h-2z"/>
+        </svg>
+        New voice search
+      </button>
+    </div>
+    <div class="product-grid" id="productGrid"></div>
+  </section>
+
+  <script>
+  // ════════════════════════════════════════════════════════════════
+  //  DOM refs
+  // ════════════════════════════════════════════════════════════════
+  const hero          = document.getElementById('hero');
+  const heroPill      = document.getElementById('heroPill');
+  const searchInput   = document.getElementById('searchInput');
+  const micBtn        = document.getElementById('micBtn');
+  const statusRow     = document.getElementById('statusRow');
+  const statusText    = document.getElementById('statusText');
+  const waveArea      = document.getElementById('waveArea');
+  const interimPill   = document.getElementById('interimPill');
+  const interimText   = document.getElementById('interimText');
+  const errBanner     = document.getElementById('errBanner');
+  const errText       = document.getElementById('errText');
+  const headerBar     = document.getElementById('headerBar');
+  const headerInput   = document.getElementById('headerInput');
+  const headerMicBtn  = document.getElementById('headerMicBtn');
+  const resultsSection= document.getElementById('resultsSection');
+  const productGrid   = document.getElementById('productGrid');
+  const resultsMeta   = document.getElementById('resultsMeta');
+  const newSearchBtn  = document.getElementById('newSearchBtn');
+  const logoBtn       = document.getElementById('logoBtn');
+
+  // ════════════════════════════════════════════════════════════════
+  //  LAYOUT TRANSITIONS
+  // ════════════════════════════════════════════════════════════════
+  function showResults() {
+    hero.classList.add('collapsed');          // slides up
+    headerBar.classList.add('visible');       // header bar slides in
+    resultsSection.classList.add('on');       // results fade in
+  }
+
+  function resetToHero() {
+    hero.classList.remove('collapsed');
+    headerBar.classList.remove('visible');
+    resultsSection.classList.remove('on');
+    searchInput.value  = '';
+    headerInput.value  = '';
+    productGrid.innerHTML = '';
+    resultsMeta.textContent = '';
+    interimPill.classList.remove('on');
+    setStatus('ready', 'Tap the mic and speak');
+  }
+
+  logoBtn.addEventListener('click', resetToHero);
+  newSearchBtn.addEventListener('click', () => {
+    resetToHero();
+    // Small delay so hero finishes expanding, then auto-start mic
+    setTimeout(() => {
+      if (SR) startVoice();
+    }, 300);
+  });
+
+  // Clicking the header compact bar takes you back to hero
+  headerInput.addEventListener('click', resetToHero);
+
+  // Header mic button
+  headerMicBtn.addEventListener('click', () => {
+    resetToHero();
+    setTimeout(() => { if (SR) startVoice(); }, 300);
+  });
+
+  // ════════════════════════════════════════════════════════════════
+  //  UI STATE HELPERS
+  // ════════════════════════════════════════════════════════════════
+  function setStatus(s, msg) {
+    statusRow.className = 'status-row s-' + s;
+    statusText.textContent = msg;
+  }
+
+  function setMicState(s) {   // 'idle' | 'recording' | 'processing'
+    micBtn.className = s;
+  }
+
+  function setListeningStyle(on) {
+    heroPill.classList.toggle('listening', on);
+    waveArea.classList.toggle('on', on);
+  }
+
+  function showInterim(t) {
+    interimText.textContent = t;
+    interimPill.classList.toggle('on', !!t);
+  }
+
+  function showErr(msg) {
+    errText.textContent = msg;
+    errBanner.classList.add('on');
+    setStatus('error', msg);
+  }
+
+  function clearErr() { errBanner.classList.remove('on'); }
+
+  // ════════════════════════════════════════════════════════════════
+  //  SPEECH RECOGNITION
+  // ════════════════════════════════════════════════════════════════
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  if (!SR) {
+    micBtn.disabled = true;
+    showErr('Voice search needs Chrome, Edge, or Safari.');
+  }
+
+  let recognition = null;
+  let isListening = false;
+  let finalBuffer = '';
+
+  function buildRecognition() {
+    const r = new SR();
+    r.lang           = 'en-US';
+    r.interimResults = true;   // live word-by-word updates
+    r.continuous     = false;  // auto-stops on silence
+    r.maxAlternatives = 1;
+
+    r.onstart = () => {
+      isListening = true;
+      finalBuffer = '';
+      searchInput.value = '';
+      clearErr();
+      setStatus('listening', 'Listening…');
+      setMicState('recording');
+      setListeningStyle(true);
+    };
+
+    // ── Live updates — fires on every word ───────────────────────
+    r.onresult = (event) => {
+      let interim = '';
+      let justFinal = '';
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const t = event.results[i][0].transcript;
+        event.results[i].isFinal ? (justFinal += t) : (interim += t);
+      }
+
+      if (justFinal) finalBuffer += justFinal;
+
+      const display = finalBuffer + (interim ? (finalBuffer ? ' ' : '') + interim : '');
+      searchInput.value = display;
+      showInterim(interim);
+    };
+
+    // ── Silence detected — browser auto-stops ────────────────────
+    r.onend = () => {
+      isListening = false;
+      setListeningStyle(false);
+      setMicState('idle');
+      showInterim('');
+
+      const raw = (finalBuffer || searchInput.value).trim();
+      raw ? cleanAndSearch(raw) : setStatus('ready', 'Tap the mic and speak');
+    };
+
+    r.onerror = (event) => {
+      isListening = false;
+      setListeningStyle(false);
+      setMicState('idle');
+      showInterim('');
+
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        showErr('Mic access denied. Tap the lock icon in your browser to allow.');
+      } else if (event.error === 'no-speech') {
+        setStatus('ready', "Didn't catch anything — try again");
+      } else if (event.error === 'network') {
+        showErr('Network error. Check your connection.');
+      } else {
+        setStatus('ready', `Voice error: ${event.error}`);
+      }
+    };
+
+    return r;
+  }
+
+  function startVoice() {
+    if (isListening) { recognition?.stop(); return; }
+    recognition = buildRecognition();
+    try { recognition.start(); }
+    catch (e) { showErr('Could not start voice recognition: ' + e.message); }
+  }
+
+  micBtn.addEventListener('click', startVoice);
+
+  // ════════════════════════════════════════════════════════════════
+  //  GEMINI CLEAN  →  ALGOLIA SEARCH
+  // ════════════════════════════════════════════════════════════════
+  async function cleanAndSearch(raw) {
+    setStatus('processing', 'Refining query…');
+    setMicState('processing');
+    searchInput.value = raw;
+
+    let cleaned = raw;
+    try {
+      const res = await fetch('/api/clean', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: raw }),
+      });
+      if (res.ok) cleaned = (await res.json()).cleaned?.trim() || raw;
+    } catch { /* fallback to raw */ }
+
+    setMicState('idle');
+    searchInput.value = cleaned;
+    handleSearch(cleaned);
+  }
+
+  async function handleSearch(query) {
+    if (!query?.trim()) { setStatus('ready', 'Tap the mic and speak'); return; }
+
+    query = query.trim();
+    searchInput.value  = query;
+    headerInput.value  = query;
+
+    setStatus('searching', `Searching for "${query}"…`);
+
+    // Show results area with skeletons while fetching
+    resultsMeta.textContent  = `"${query}"`;
+    productGrid.innerHTML    = buildSkeletons(6);
+    showResults();  // ← hero slides up, results slide in
+
+    try {
+      const res  = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+      const data = await res.json();
+      renderHits(data.hits || [], data.nbHits || 0, query);
+    } catch {
+      productGrid.innerHTML = `<p class="no-results">Search failed. Check your connection.</p>`;
+      setStatus('error', 'Search request failed');
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  //  RENDER ALGOLIA HITS
+  // ════════════════════════════════════════════════════════════════
+  function renderHits(hits, nbHits, query) {
+    productGrid.innerHTML = '';
+
+    if (!hits.length) {
+      productGrid.innerHTML = `
+        <p class="no-results">
+          No results for <strong>"${esc(query)}"</strong>.<br>
+          Try a different word or phrase.
+        </p>`;
+      setStatus('ready', 'No results — tap mic to try again');
+      return;
+    }
+
+    hits.forEach((hit, i) => {
+      const name   = esc(hit.name || 'Product');
+      const brand  = esc(hit.brand_name || '');
+      const cat    = esc(hit.category_name || hit.subcategory_name || '');
+      const price  = hit.item_price
+                       ? 'Rs. ' + Number(hit.item_price).toLocaleString('en-PK')
+                       : '';
+      const img    = (hit.images_full_url && hit.images_full_url[0]) || '';
+      const rating = parseFloat(hit.avg_rating) || 0;
+      const rCount = parseInt(hit.rating_count) || 0;
+      const stars  = rating > 0
+        ? '★'.repeat(Math.round(rating)) + '☆'.repeat(5 - Math.round(rating)) + ` (${rCount})`
+        : '';
+
+      const imgHtml = img
+        ? `<img src="${esc(img)}" alt="${name}" loading="lazy"
+               onerror="this.parentElement.innerHTML='<span class=card-img-ph>🛍️</span>'">`
+        : `<span class="card-img-ph">🛍️</span>`;
+
+      const card = document.createElement('div');
+      card.className = 'product-card';
+      card.style.animationDelay = (i * 45) + 'ms';
+      card.innerHTML = `
+        <div class="card-img">${imgHtml}</div>
+        <div class="card-body">
+          ${brand ? `<div class="c-brand">${brand}</div>` : ''}
+          <div class="c-name">${name}</div>
+          ${stars ? `<div class="c-stars">${stars}</div>` : ''}
+          <div class="c-price">${price}</div>
+        </div>`;
+      productGrid.appendChild(card);
+    });
+
+    const label = nbHits > hits.length
+      ? `"${query}" — ${hits.length} of ${nbHits.toLocaleString()} results`
+      : `"${query}" — ${nbHits} result${nbHits !== 1 ? 's' : ''}`;
+    resultsMeta.textContent = label;
+    setStatus('ready', 'Tap the mic to search again');
+  }
+
+  function buildSkeletons(n) {
+    return Array.from({ length: n }, () => `
+      <div class="skel-card">
+        <div class="skel skel-sq"></div>
+        <div class="skel-body">
+          <div class="skel skel-l w60"></div>
+          <div class="skel skel-l w80"></div>
+          <div class="skel skel-l w45"></div>
+        </div>
+      </div>`).join('');
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  //  KEYBOARD + CHIPS
+  // ════════════════════════════════════════════════════════════════
+  searchInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && searchInput.value.trim())
+      handleSearch(searchInput.value.trim());
+  });
+
+  function tryChip(q) { searchInput.value = q; handleSearch(q); }
+
+  // ════════════════════════════════════════════════════════════════
+  //  UTILS
+  // ════════════════════════════════════════════════════════════════
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g,
+      c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  }
+
+  // Initial state
+  if (SR) setStatus('ready', 'Tap the mic and speak');
+  </script>
+
+</body>
+</html>
