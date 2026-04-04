@@ -33,7 +33,7 @@ Raw: ${raw}
 Cleaned:`;
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
-app.use(express.static(path.join(__dirname, '..')));
+app.use(express.static(path.join(__dirname)));
 app.use(express.json());
 
 // ─── Clean endpoint ───────────────────────────────────────────────────────────
