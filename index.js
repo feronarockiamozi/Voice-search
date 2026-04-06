@@ -17,59 +17,60 @@ const ai  = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // ─── Gemini prompt: strip filler, return clean query ─────────────────────────
 const buildPrompt = (raw) =>
-`You are a multilingual quick-commerce (q-commerce) voice search query cleaner for an on-demand grocery and essentials delivery app used primarily in India.
-Users speak in English, Hindi, or a mix of both (Hinglish). They also use regional synonyms, local slang, and transliterated words.
-Your job: convert the raw voice transcript into the shortest, most precise English product search query that will match catalogue listings.
+`You are a multilingual voice search query cleaner for an Indian quick-commerce app that sells ONLY baby care and maternity products — covering pregnant mothers and babies from newborn up to 5 years old.
+Users speak in English, Hindi, or Hinglish and often use regional/informal terms for baby and pregnancy products.
+Your job: convert the raw voice transcript into the shortest, most precise English product search query that will match catalogue listings on a baby care platform.
 
 Rules:
-1. Strip ALL filler words, greetings, hesitations (um, uh, hey, please, yaar, bhai, arre, bas, thoda, wala/wali/wale, etc.)
-2. Translate regional / Hindi / Hinglish product words into their standard English catalogue equivalents.
-3. Preserve quantity cues (e.g. "2 litre", "ek dozen", "chhe pack", "500 gram", "bada").
-4. Preserve brand names exactly as spoken.
-5. Preserve product variants: size, flavour, type (e.g. "full-fat", "diet", "organic", "sugar-free").
-6. Do NOT infer or add words the user did not say.
-7. Return ONLY the cleaned English query — no explanation, no quotes, no trailing punctuation.
+1. Strip ALL filler words, greetings, hesitations (um, uh, yaar, bhai, arre, bas, thoda, wala/wali/wale, please, can you, I need, mujhe chahiye, etc.)
+2. Translate Hindi / Hinglish / regional baby and maternity terms into their standard English catalogue equivalents (see reference below).
+3. Preserve quantity and size cues (e.g. "size 2", "newborn", "0-6 months", "100ml", "pack of 50").
+4. Preserve brand names exactly as spoken (e.g. Pampers, Huggies, Himalaya, Mamy Poko, Johnson's, Chicco, Pigeon).
+5. Preserve product variants: age range, stage, type, flavour (e.g. "stage 1", "sensitive skin", "fragrance-free", "apple flavour").
+6. If the user describes a symptom or need (e.g. "baby ko neend nahi aati"), map it to the most relevant product category (e.g. → baby sleep aid / gripe water).
+7. Do NOT infer or add words the user did not say beyond the symptom-to-product mapping above.
+8. Return ONLY the cleaned English query — no explanation, no quotes, no trailing punctuation.
 
-Regional word → English catalogue term (non-exhaustive reference):
-gaadi / gadi          → car
-baniyan / banyan      → vest
-chappal               → slippers / flip-flops
-kurta                 → kurta (keep as-is, it's a catalogue term)
-dupatta               → dupatta (keep as-is)
-aata / atta           → wheat flour
-maida                 → all-purpose flour
-besan                 → gram flour
-doodh                 → milk
-chawal                → rice
-daal / dal            → lentils
-sabzi / subzi         → vegetables
-namak                 → salt
-cheeni / chini        → sugar
-tel                   → oil
-ghee                  → ghee (keep as-is)
-sabun                 → soap
-toothpaste / manjan   → toothpaste
-kapda / kapdey        → clothes / fabric
-juta / joote          → shoes
-chaku                 → knife
-bartan                → utensils / cookware
-cooler (in context)   → air cooler
-pankha                → fan
-Use your broader multilingual knowledge to handle any regional terms not listed above.
+Regional / Hindi word → English catalogue term (baby & maternity focus):
+langot                      → cloth nappy / cloth diaper
+nappy / napkin (baby)       → diaper
+looper / lapet              → swaddle wrap
+jhula / palna               → baby swing / baby cradle
+tel maalish / malish        → baby massage oil
+kajal (baby)                → baby kohl / baby kajal
+doodh / dudh                → milk / infant formula
+daant nikalna               → teething
+colic / gas (baby context)  → gripe water / colic drops
+angochha / angocha          → baby towel / hooded towel
+rassi / naal                → umbilical cord care
+susu / potty (baby context) → diaper rash cream / potty training
+bottle (baby context)       → feeding bottle
+nipple / teat               → bottle nipple / feeding teat
+chusni / pacifier           → pacifier / soother
+katori-chamach              → weaning bowl and spoon set
+pregnancy belt / petti      → maternity support belt
+delivery ke baad            → postpartum / postnatal
+garbhavati / pregnant       → maternity / prenatal
+stan / breast (nursing)     → nursing pad / breast pad
+pump (nursing context)      → breast pump
+Use your broader multilingual and medical knowledge to handle any regional terms not listed above.
 
 Examples:
-"mujhe ek gaadi chahiye"                                     → car
-"baniyan do number mein chahiye"                             → vest size 2
-"um I need like two litres of full fat doodh please"         → 2 litre full fat milk
-"yaar ek kilo basmati chawal dena"                           → 1 kg basmati rice
-"arre bhai sunflower tel 1 litre"                            → sunflower oil 1 litre
-"can you get me a six pack of corona beer"                   → Corona beer 6 pack
-"get me toilet paper the three ply kind like 9 rolls"        → 3 ply toilet paper 9 rolls
-"mujhe Parle-G biscuit chahiye ek bada pack"                 → Parle-G biscuit large pack
-"baby wipes sensitive skin water based"                      → sensitive water baby wipes
-"show me good protein bars maybe chocolate flavour"          → chocolate protein bar
-"ek dozen free range ande chahiye"                           → free range eggs 12
-"Maggi noodles do packet"                                    → Maggi noodles 2 pack
+"mujhe Pampers size 2 chahiye"                                     → Pampers diaper size 2
+"baby ka langot do pack"                                           → cloth nappy 2 pack
+"um daant nikal rahe hain kuch dena"                               → teething gel / teething toy
+"Himalaya baby tel 200ml"                                          → Himalaya baby massage oil 200ml
+"chusni chahiye newborn ke liye"                                   → newborn pacifier soother
+"Johnson's baby shampoo no tears wala"                             → Johnson's baby shampoo no tears
+"mujhe breast pump chahiye electric"                               → electric breast pump
+"baby ko raat ko neend nahi aati kuch hai kya"                     → baby sleep aid gripe water
+"Huggies sensitive wipes ek bada pack"                             → Huggies sensitive baby wipes large pack
+"prenatal vitamins folic acid wali"                                → prenatal vitamins folic acid
+"stage 1 formula milk Nan Pro"                                     → Nan Pro stage 1 infant formula
+"feeding bottle anti colic Pigeon"                                 → Pigeon anti-colic feeding bottle
+"colic drop Woodward's"                                            → Woodward's gripe water colic drops
+"baby food 6 month apple puree"                                    → apple puree baby food 6 months
+"maternity pad delivery ke baad"                                   → maternity pad postnatal
 
 Raw: ${raw}
 Cleaned:`;
