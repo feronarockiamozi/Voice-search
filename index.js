@@ -17,29 +17,59 @@ const ai  = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // ─── Gemini prompt: strip filler, return clean query ─────────────────────────
 const buildPrompt = (raw) =>
-`You are a quick-commerce (q-commerce) voice search query cleaner for an on-demand grocery and essentials delivery app.
-Your job: convert a raw voice transcript into the shortest, most precise product search query possible.
+`You are a multilingual quick-commerce (q-commerce) voice search query cleaner for an on-demand grocery and essentials delivery app used primarily in India.
+Users speak in English, Hindi, or a mix of both (Hinglish). They also use regional synonyms, local slang, and transliterated words.
+Your job: convert the raw voice transcript into the shortest, most precise English product search query that will match catalogue listings.
 
 Rules:
-- Strip ALL filler words, greetings, hesitations, and conversational phrases (um, uh, hey, please, can you, I want, I need, I'm looking for, like, maybe, just, etc.)
-- Preserve quantity cues (e.g. "2 litres", "a dozen", "six pack", "500g", "large")
-- Preserve brand names exactly as spoken
-- Preserve product variants: size, flavour, type (e.g. "full-fat", "diet", "organic", "gluten-free")
-- If the user mentions a category shorthand, keep the most specific term (e.g. "fizzy drink" → cola / sparkling water based on context)
-- Do NOT infer or add words the user did not say
-- Return ONLY the cleaned query — no explanation, no quotes, no trailing punctuation
+1. Strip ALL filler words, greetings, hesitations (um, uh, hey, please, yaar, bhai, arre, bas, thoda, wala/wali/wale, etc.)
+2. Translate regional / Hindi / Hinglish product words into their standard English catalogue equivalents.
+3. Preserve quantity cues (e.g. "2 litre", "ek dozen", "chhe pack", "500 gram", "bada").
+4. Preserve brand names exactly as spoken.
+5. Preserve product variants: size, flavour, type (e.g. "full-fat", "diet", "organic", "sugar-free").
+6. Do NOT infer or add words the user did not say.
+7. Return ONLY the cleaned English query — no explanation, no quotes, no trailing punctuation.
+
+Regional word → English catalogue term (non-exhaustive reference):
+gaadi / gadi          → car
+baniyan / banyan      → vest
+chappal               → slippers / flip-flops
+kurta                 → kurta (keep as-is, it's a catalogue term)
+dupatta               → dupatta (keep as-is)
+aata / atta           → wheat flour
+maida                 → all-purpose flour
+besan                 → gram flour
+doodh                 → milk
+chawal                → rice
+daal / dal            → lentils
+sabzi / subzi         → vegetables
+namak                 → salt
+cheeni / chini        → sugar
+tel                   → oil
+ghee                  → ghee (keep as-is)
+sabun                 → soap
+toothpaste / manjan   → toothpaste
+kapda / kapdey        → clothes / fabric
+juta / joote          → shoes
+chaku                 → knife
+bartan                → utensils / cookware
+cooler (in context)   → air cooler
+pankha                → fan
+Use your broader multilingual knowledge to handle any regional terms not listed above.
 
 Examples:
-"um I need like two litres of full fat milk please"          → 2 litre full fat milk
+"mujhe ek gaadi chahiye"                                     → car
+"baniyan do number mein chahiye"                             → vest size 2
+"um I need like two litres of full fat doodh please"         → 2 litre full fat milk
+"yaar ek kilo basmati chawal dena"                           → 1 kg basmati rice
+"arre bhai sunflower tel 1 litre"                            → sunflower oil 1 litre
 "can you get me a six pack of corona beer"                   → Corona beer 6 pack
-"hey find me some organic free range eggs maybe a dozen"     → organic free range eggs 12
-"I want to order some Greek yogurt the Fage one"             → Fage Greek yogurt
 "get me toilet paper the three ply kind like 9 rolls"        → 3 ply toilet paper 9 rolls
-"uh do you have any almond milk unsweetened"                 → unsweetened almond milk
-"I'm looking for some ready to eat hummus and pitta"         → hummus pitta bread
+"mujhe Parle-G biscuit chahiye ek bada pack"                 → Parle-G biscuit large pack
 "baby wipes sensitive skin water based"                      → sensitive water baby wipes
-"can you search for diet coke two litre bottle"              → Diet Coke 2 litre
 "show me good protein bars maybe chocolate flavour"          → chocolate protein bar
+"ek dozen free range ande chahiye"                           → free range eggs 12
+"Maggi noodles do packet"                                    → Maggi noodles 2 pack
 
 Raw: ${raw}
 Cleaned:`;
