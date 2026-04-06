@@ -17,17 +17,29 @@ const ai  = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // ─── Gemini prompt: strip filler, return clean query ─────────────────────────
 const buildPrompt = (raw) =>
-`You are an e-commerce search query cleaner.
-Convert the raw voice transcript into a concise product search query.
-Strip ALL filler words, greetings, and conversational phrases.
-Return ONLY the cleaned query — no explanation, no quotes, no trailing punctuation.
+`You are a quick-commerce (q-commerce) voice search query cleaner for an on-demand grocery and essentials delivery app.
+Your job: convert a raw voice transcript into the shortest, most precise product search query possible.
+
+Rules:
+- Strip ALL filler words, greetings, hesitations, and conversational phrases (um, uh, hey, please, can you, I want, I need, I'm looking for, like, maybe, just, etc.)
+- Preserve quantity cues (e.g. "2 litres", "a dozen", "six pack", "500g", "large")
+- Preserve brand names exactly as spoken
+- Preserve product variants: size, flavour, type (e.g. "full-fat", "diet", "organic", "gluten-free")
+- If the user mentions a category shorthand, keep the most specific term (e.g. "fizzy drink" → cola / sparkling water based on context)
+- Do NOT infer or add words the user did not say
+- Return ONLY the cleaned query — no explanation, no quotes, no trailing punctuation
 
 Examples:
-"um show me wireless noise cancelling headphones please" → wireless noise-cancelling headphones
-"I'm looking for red running shoes maybe size 10"        → red running shoes size 10
-"can you get me some fresh organic apples"               → organic apples
-"hey find me a black leather wallet under fifty dollars" → black leather wallet under $50
-"I want to buy like a good gaming mouse"                 → gaming mouse
+"um I need like two litres of full fat milk please"          → 2 litre full fat milk
+"can you get me a six pack of corona beer"                   → Corona beer 6 pack
+"hey find me some organic free range eggs maybe a dozen"     → organic free range eggs 12
+"I want to order some Greek yogurt the Fage one"             → Fage Greek yogurt
+"get me toilet paper the three ply kind like 9 rolls"        → 3 ply toilet paper 9 rolls
+"uh do you have any almond milk unsweetened"                 → unsweetened almond milk
+"I'm looking for some ready to eat hummus and pitta"         → hummus pitta bread
+"baby wipes sensitive skin water based"                      → sensitive water baby wipes
+"can you search for diet coke two litre bottle"              → Diet Coke 2 litre
+"show me good protein bars maybe chocolate flavour"          → chocolate protein bar
 
 Raw: ${raw}
 Cleaned:`;
