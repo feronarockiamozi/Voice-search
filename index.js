@@ -175,51 +175,64 @@ function cacheSet(key, value) {
   cleanCache.set(key, value);
 }
 
-// ─── Clean endpoint ───────────────────────────────────────────────────────────
+// ─── Shared Algolia search helper ────────────────────────────────────────────
+const ALGOLIA_ATTRS = [
+  'objectID', 'name', 'brand_name', 'category_name',
+  'subcategory_name', 'item_price', 'images_full_url',
+  'avg_rating', 'rating_count', 'slug',
+];
+
+async function algoliaSearch(q) {
+  const result = await algolia.searchSingleIndex({
+    indexName    : process.env.ALGOLIA_INDEX_NAME,
+    searchParams : { query: q, hitsPerPage: 9, attributesToRetrieve: ALGOLIA_ATTRS },
+  });
+  return { hits: result.hits, nbHits: result.nbHits };
+}
+
+// ─── Clean + search endpoint ──────────────────────────────────────────────────
+// Does LLM clean and Algolia search in one server round-trip.
+// Returns { cleaned, hits, nbHits } so the client never needs a second fetch.
 app.post('/api/clean', async (req, res) => {
   const { query } = req.body ?? {};
-  if (!query?.trim()) return res.json({ cleaned: '' });
+  if (!query?.trim()) return res.json({ cleaned: '', hits: [], nbHits: 0 });
 
   const raw = query.trim().toLowerCase();
 
-  // Cache hit — skip LLM entirely
-  if (cleanCache.has(raw)) {
-    console.log(`[Cache]   "${raw}"  →  "${cleanCache.get(raw)}"`);
-    return res.json({ cleaned: cleanCache.get(raw) });
+  // Resolve cleaned query (cache or LLM)
+  let cleaned = cleanCache.get(raw);
+  if (cleaned) {
+    console.log(`[Cache]   "${raw}"  →  "${cleaned}"`);
+  } else {
+    try {
+      cleaned = await cleanQuery(query.trim());
+      cacheSet(raw, cleaned);
+    } catch (err) {
+      console.error('[Clean] All providers failed:', err.message);
+      cleaned = query.trim();
+    }
   }
 
+  // Search Algolia server-side (fast — same cloud, no extra client round-trip)
   try {
-    const cleaned = await cleanQuery(query.trim());
-    cacheSet(raw, cleaned);
-    res.json({ cleaned });
+    const { hits, nbHits } = await algoliaSearch(cleaned);
+    console.log(`[Algolia]  "${cleaned}"  →  ${nbHits} hits`);
+    res.json({ cleaned, hits, nbHits });
   } catch (err) {
-    console.error('[Clean] All providers failed:', err.message);
-    res.json({ cleaned: query.trim() });
+    console.error('[Algolia] Error:', err.message);
+    res.json({ cleaned, hits: [], nbHits: 0 });
   }
 });
 
-// ─── Algolia search endpoint ──────────────────────────────────────────────────
+// ─── Algolia search endpoint (used for the fast raw/quick query) ──────────────
 app.get('/api/search', async (req, res) => {
   const q = (req.query.q || '').trim();
   if (!q) return res.json({ hits: [], nbHits: 0 });
 
   try {
-    const result = await algolia.searchSingleIndex({
-      indexName    : process.env.ALGOLIA_INDEX_NAME,
-      searchParams : {
-        query               : q,
-        hitsPerPage         : 9,
-        attributesToRetrieve: [
-          'objectID', 'name', 'brand_name', 'category_name',
-          'subcategory_name', 'item_price', 'images_full_url',
-          'avg_rating', 'rating_count', 'slug',
-        ],
-      },
-    });
-
-    console.log(`[Algolia]  "${q}"  →  ${result.nbHits} hits`);
-    res.json({ hits: result.hits, nbHits: result.nbHits });
-
+    const { hits, nbHits } = await algoliaSearch(q);
+    console.log(`[Algolia]  "${q}"  →  ${nbHits} hits`);
+    res.json({ hits, nbHits });
   } catch (err) {
     console.error('[Algolia] Error:', err.message);
     res.status(500).json({ error: err.message, hits: [], nbHits: 0 });

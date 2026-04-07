@@ -838,27 +838,24 @@
       }
     });
 
-    // ── Tier 3: LLM response (Groq ~150ms / Gemini ~700ms) ───────
-    const llmData    = await llmPromise;
-    const llmClean   = llmData?.cleaned?.trim() || quick;
+    // ── Tier 3: /api/clean returns { cleaned, hits, nbHits } ────────
+    // Server did LLM + Algolia together — no second fetch needed.
+    const llmData  = await llmPromise;
+    const llmClean = llmData?.cleaned?.trim() || quick;
     setMicState('idle');
 
     if (!cachedGemini) clientCleanCache.set(cacheKey, llmClean);
 
     if (llmClean && llmClean !== finalQuery) {
-      // LLM found something better — fire one more Algolia search
+      // Swap to refined results returned directly from the server
       searchInput.value       = llmClean;
       headerInput.value       = llmClean;
       resultsMeta.textContent = `"${llmClean}"`;
-      try {
-        const res  = await fetch(`/api/search?q=${encodeURIComponent(llmClean)}`);
-        const data = await res.json();
-        llmHasLanded = true;
-        clearSlowTimers(slowTimers);
-        renderHits(data.hits || [], data.nbHits || 0, llmClean);
-      } catch { /* first results stay */ }
+      llmHasLanded = true;
+      clearSlowTimers(slowTimers);
+      renderHits(llmData?.hits || [], llmData?.nbHits || 0, llmClean);
     }
-    // If llmClean === finalQuery: first results already correct, no extra call
+    // If llmClean === finalQuery: first results already correct, nothing to do
 
     setStatus('ready', '');
   }
