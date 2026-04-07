@@ -660,9 +660,12 @@
     showErr('Voice search needs Chrome, Edge, or Safari.');
   }
 
-  let recognition = null;
-  let isListening = false;
-  let finalBuffer = '';
+  let recognition       = null;
+  let isListening       = false;
+  let finalBuffer       = '';
+  let prewarmPromise    = null;   // Gemini call fired during speech
+  let prewarmQuery      = '';     // the query that prewarm was fired for
+  let prewarmTimer      = null;   // debounce timer for prewarm
 
   function buildRecognition() {
     const r = new SR();
@@ -696,6 +699,21 @@
       const display = finalBuffer + (interim ? (finalBuffer ? ' ' : '') + interim : '');
       searchInput.value = display;
       showInterim(interim);
+
+      // ── Pre-warm Gemini while user is still speaking ──────────────
+      // Debounce 500ms: if transcript stable, fire clean call early
+      const stableQuery = display.trim();
+      if (stableQuery.length > 3 && stableQuery !== prewarmQuery) {
+        clearTimeout(prewarmTimer);
+        prewarmTimer = setTimeout(() => {
+          prewarmQuery   = stableQuery;
+          prewarmPromise = fetch('/api/clean', {
+            method  : 'POST',
+            headers : { 'Content-Type': 'application/json' },
+            body    : JSON.stringify({ query: stableQuery }),
+          }).then(r => r.ok ? r.json() : null).catch(() => null);
+        }, 500);
+      }
     };
 
     // ── Silence detected — browser auto-stops ────────────────────
@@ -704,6 +722,7 @@
       setListeningStyle(false);
       setMicState('idle');
       showInterim('');
+      clearTimeout(prewarmTimer);
 
       const raw = (finalBuffer || searchInput.value).trim();
       raw ? cleanAndSearch(raw) : setStatus('ready', 'Tap the mic and speak');
@@ -739,42 +758,86 @@
   micBtn.addEventListener('click', startVoice);
 
   // ════════════════════════════════════════════════════════════════
-  //  GEMINI CLEAN  →  ALGOLIA SEARCH
+  //  OPTIMISTIC SEARCH — parallel Gemini + Algolia
+  //
+  //  Timeline:
+  //    t=0ms   speech ends  →  show skeletons + fire raw search + Gemini
+  //    t~200ms raw Algolia  →  render first results (user sees content)
+  //    t~800ms Gemini done  →  fire refined Algolia search
+  //    t~1000ms             →  silently swap to refined results
   // ════════════════════════════════════════════════════════════════
   async function cleanAndSearch(raw) {
-    setStatus('processing', 'Refining query…');
     setMicState('processing');
     searchInput.value = raw;
 
-    let cleaned = raw;
-    try {
-      const res = await fetch('/api/clean', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: raw }),
-      });
-      if (res.ok) cleaned = (await res.json()).cleaned?.trim() || raw;
-    } catch { /* fallback to raw */ }
+    // 1. Show skeletons immediately — don't wait for anything
+    resultsMeta.textContent = `"${raw}"`;
+    productGrid.innerHTML   = buildSkeletons(6);
+    showResults();
+    setStatus('searching', `Searching…`);
 
+    // 2. Reuse prewarmed Gemini promise if query matches, else fire fresh
+    const cleanPromise = (prewarmQuery === raw && prewarmPromise)
+      ? prewarmPromise
+      : fetch('/api/clean', {
+          method  : 'POST',
+          headers : { 'Content-Type': 'application/json' },
+          body    : JSON.stringify({ query: raw }),
+        }).then(r => r.ok ? r.json() : null).catch(() => null);
+
+    // Reset prewarm state
+    prewarmPromise = null;
+    prewarmQuery   = '';
+
+    // 3. Fire raw Algolia search immediately in parallel
+    const rawSearchPromise = fetch(`/api/search?q=${encodeURIComponent(raw)}`)
+      .then(r => r.json()).catch(() => ({ hits: [], nbHits: 0 }));
+
+    // 4. Show raw results as soon as they land (~200ms)
+    let refinedHasLanded = false;
+    rawSearchPromise.then(data => {
+      if (!refinedHasLanded) {
+        renderHits(data.hits || [], data.nbHits || 0, raw);
+      }
+    });
+
+    // 5. Await Gemini
+    const cleanData = await cleanPromise;
+    const cleaned   = cleanData?.cleaned?.trim() || raw;
     setMicState('idle');
-    searchInput.value = cleaned;
-    handleSearch(cleaned);
+
+    if (cleaned && cleaned !== raw) {
+      // Update the input to show the refined query
+      searchInput.value = cleaned;
+      headerInput.value = cleaned;
+      resultsMeta.textContent = `"${cleaned}"`;
+      setStatus('searching', `Refining to "${cleaned}"…`);
+
+      // 6. Fire refined search and swap results
+      try {
+        const res  = await fetch(`/api/search?q=${encodeURIComponent(cleaned)}`);
+        const data = await res.json();
+        refinedHasLanded = true;
+        renderHits(data.hits || [], data.nbHits || 0, cleaned);
+      } catch { /* raw results stay visible */ }
+    } else {
+      // Gemini returned same query — raw results are already correct
+      searchInput.value = raw;
+      headerInput.value = raw;
+    }
+
+    setStatus('ready', '');
   }
 
   async function handleSearch(query) {
     if (!query?.trim()) { setStatus('ready', 'Tap the mic and speak'); return; }
-
     query = query.trim();
     searchInput.value  = query;
     headerInput.value  = query;
-
+    resultsMeta.textContent = `"${query}"`;
+    productGrid.innerHTML   = buildSkeletons(6);
+    showResults();
     setStatus('searching', `Searching for "${query}"…`);
-
-    // Show results area with skeletons while fetching
-    resultsMeta.textContent  = `"${query}"`;
-    productGrid.innerHTML    = buildSkeletons(6);
-    showResults();  // ← hero slides up, results slide in
-
     try {
       const res  = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
       const data = await res.json();
@@ -783,6 +846,7 @@
       productGrid.innerHTML = `<p class="no-results">Search failed. Check your connection.</p>`;
       setStatus('error', 'Search request failed');
     }
+    setStatus('ready', '');
   }
 
   // ════════════════════════════════════════════════════════════════

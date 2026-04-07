@@ -83,10 +83,30 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
+// ─── Gemini response cache (in-memory, max 500 entries) ──────────────────────
+const cleanCache = new Map();
+const CACHE_MAX  = 500;
+
+function cacheSet(key, value) {
+  if (cleanCache.size >= CACHE_MAX) {
+    // evict oldest entry
+    cleanCache.delete(cleanCache.keys().next().value);
+  }
+  cleanCache.set(key, value);
+}
+
 // ─── Clean endpoint ───────────────────────────────────────────────────────────
 app.post('/api/clean', async (req, res) => {
   const { query } = req.body ?? {};
   if (!query?.trim()) return res.json({ cleaned: '' });
+
+  const raw = query.trim().toLowerCase();
+
+  // Cache hit — skip Gemini entirely
+  if (cleanCache.has(raw)) {
+    console.log(`[Cache]   "${raw}"  →  "${cleanCache.get(raw)}"`);
+    return res.json({ cleaned: cleanCache.get(raw) });
+  }
 
   try {
     const result  = await ai.models.generateContent({
@@ -94,14 +114,13 @@ app.post('/api/clean', async (req, res) => {
       contents : buildPrompt(query.trim()),
     });
 
-    // result.text is a getter on the GenerateContentResponse object
     const cleaned = (result.text ?? '').trim() || query.trim();
     console.log(`[Gemini]  "${query}"  →  "${cleaned}"`);
+    cacheSet(raw, cleaned);
     res.json({ cleaned });
 
   } catch (err) {
     console.error('[Gemini] Error:', err.message);
-    // Fallback: return raw query so search still works
     res.json({ cleaned: query.trim() });
   }
 });
