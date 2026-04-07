@@ -768,14 +768,29 @@
 
   micBtn.addEventListener('click', startVoice);
 
+  // ── Slow-network engagement messages ─────────────────────────────
+  // Escalating friendly messages if results take longer than expected.
+  const SLOW_MSGS = [
+    { ms: 1200, text: 'Checking our baby catalogue…'         },
+    { ms: 2500, text: 'Network seems a bit slow, hang on…'   },
+    { ms: 4000, text: 'Almost there, finding the best match…'},
+  ];
+
+  function startSlowTimers() {
+    return SLOW_MSGS.map(({ ms, text }) =>
+      setTimeout(() => setStatus('searching', text), ms)
+    );
+  }
+  function clearSlowTimers(timers) { timers.forEach(clearTimeout); }
+
   // ════════════════════════════════════════════════════════════════
   //  OPTIMISTIC SEARCH — 3-tier clean + parallel Algolia
   //
   //  Tier 1 (0ms)    — quickClean: client JS dict strips filler/Hindi
   //  Tier 2 (~200ms) — Algolia on quickCleaned query → first results
-  //  Tier 3 (~700ms) — Gemini refines further → swap only if different
+  //  Tier 3 (~200ms with Groq / ~700ms Gemini fallback) — LLM refines
   //
-  //  Repeat queries skip Gemini via client + server cache.
+  //  Repeat queries skip LLM via client + server cache.
   // ════════════════════════════════════════════════════════════════
   async function cleanAndSearch(raw) {
     setMicState('processing');
@@ -789,18 +804,21 @@
     resultsMeta.textContent = `"${quick}"`;
     productGrid.innerHTML   = buildSkeletons(6);
     showResults();
-    setStatus('searching', `Searching…`);
+    setStatus('searching', 'Searching…');
 
-    // ── Client cache hit: skip Gemini + network for clean step ────
+    // Start slow-network timers — cleared as soon as first results land
+    const slowTimers = startSlowTimers();
+
+    // ── Client cache hit: skip LLM + network for clean step ───────
     const cachedGemini = clientCleanCache.get(cacheKey);
-    const finalQuery   = cachedGemini ?? quick;   // best clean we have right now
+    const finalQuery   = cachedGemini ?? quick;
 
     // ── Tier 2: Algolia on best-available clean query (~200ms) ────
     const firstSearchPromise = fetch(`/api/search?q=${encodeURIComponent(finalQuery)}`)
       .then(r => r.json()).catch(() => ({ hits: [], nbHits: 0 }));
 
-    // Fire Gemini in parallel (skip if we already have a cached result)
-    const geminiPromise = cachedGemini
+    // Fire LLM in parallel (skip if cached)
+    const llmPromise = cachedGemini
       ? Promise.resolve({ cleaned: cachedGemini })
       : fetch('/api/clean', {
           method  : 'POST',
@@ -809,35 +827,38 @@
         }).then(r => r.ok ? r.json() : null).catch(() => null);
 
     // Show Tier 2 results as soon as Algolia responds
-    let geminiHasLanded = false;
+    let llmHasLanded = false;
     firstSearchPromise.then(data => {
-      if (!geminiHasLanded) {
+      clearSlowTimers(slowTimers);          // results are here — stop all slow messages
+      if (!llmHasLanded) {
         searchInput.value = finalQuery;
         headerInput.value = finalQuery;
         renderHits(data.hits || [], data.nbHits || 0, finalQuery);
+        if (!cachedGemini) setStatus('searching', 'Refining results…');
       }
     });
 
-    // ── Tier 3: Gemini response (~700ms) ─────────────────────────
-    const geminiData = await geminiPromise;
-    const geminiClean = geminiData?.cleaned?.trim() || quick;
+    // ── Tier 3: LLM response (Groq ~150ms / Gemini ~700ms) ───────
+    const llmData    = await llmPromise;
+    const llmClean   = llmData?.cleaned?.trim() || quick;
     setMicState('idle');
 
-    if (!cachedGemini) clientCleanCache.set(cacheKey, geminiClean);
+    if (!cachedGemini) clientCleanCache.set(cacheKey, llmClean);
 
-    if (geminiClean && geminiClean !== finalQuery) {
-      // Gemini found something better — fire one more Algolia search
-      searchInput.value       = geminiClean;
-      headerInput.value       = geminiClean;
-      resultsMeta.textContent = `"${geminiClean}"`;
+    if (llmClean && llmClean !== finalQuery) {
+      // LLM found something better — fire one more Algolia search
+      searchInput.value       = llmClean;
+      headerInput.value       = llmClean;
+      resultsMeta.textContent = `"${llmClean}"`;
       try {
-        const res  = await fetch(`/api/search?q=${encodeURIComponent(geminiClean)}`);
+        const res  = await fetch(`/api/search?q=${encodeURIComponent(llmClean)}`);
         const data = await res.json();
-        geminiHasLanded = true;
-        renderHits(data.hits || [], data.nbHits || 0, geminiClean);
+        llmHasLanded = true;
+        clearSlowTimers(slowTimers);
+        renderHits(data.hits || [], data.nbHits || 0, llmClean);
       } catch { /* first results stay */ }
     }
-    // If geminiClean === finalQuery: first results are already correct, no extra call
+    // If llmClean === finalQuery: first results already correct, no extra call
 
     setStatus('ready', '');
   }

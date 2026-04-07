@@ -15,8 +15,8 @@ const algolia = algoliasearch(
 const app = express();
 const ai  = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-// ─── Gemini prompt: strip filler, return clean query ─────────────────────────
-const buildPrompt = (raw) =>
+// ─── Shared system prompt (used by both Groq and Gemini) ─────────────────────
+const SYSTEM_PROMPT =
 `You are a multilingual voice search query cleaner for an Indian quick-commerce app that sells ONLY baby care and maternity products — covering pregnant mothers and babies from newborn up to 5 years old.
 Users speak in English, Hindi, or Hinglish and often use regional/informal terms for baby and pregnancy products.
 Your job: convert the raw voice transcript into the shortest, most precise English product search query that will match catalogue listings on a baby care platform.
@@ -32,48 +32,81 @@ Rules:
 8. Return ONLY the cleaned English query — no explanation, no quotes, no trailing punctuation.
 
 Regional / Hindi word → English catalogue term (baby & maternity focus):
-langot                      → cloth nappy / cloth diaper
-nappy / napkin (baby)       → diaper
-looper / lapet              → swaddle wrap
-jhula / palna               → baby swing / baby cradle
-tel maalish / malish        → baby massage oil
-kajal (baby)                → baby kohl / baby kajal
-doodh / dudh                → milk / infant formula
-daant nikalna               → teething
-colic / gas (baby context)  → gripe water / colic drops
-angochha / angocha          → baby towel / hooded towel
-rassi / naal                → umbilical cord care
-susu / potty (baby context) → diaper rash cream / potty training
-bottle (baby context)       → feeding bottle
-nipple / teat               → bottle nipple / feeding teat
-chusni / pacifier           → pacifier / soother
-katori-chamach              → weaning bowl and spoon set
-pregnancy belt / petti      → maternity support belt
-delivery ke baad            → postpartum / postnatal
-garbhavati / pregnant       → maternity / prenatal
-stan / breast (nursing)     → nursing pad / breast pad
-pump (nursing context)      → breast pump
-Use your broader multilingual and medical knowledge to handle any regional terms not listed above.
+langot → cloth nappy | jhula/palna → baby swing | chusni → pacifier
+doodh/dudh → milk | daant nikalna → teething | tel maalish → baby massage oil
+angochha → baby towel | bottle (baby) → feeding bottle | katori-chamach → weaning set
+delivery ke baad → postnatal | stan/breast → nursing pad | pump → breast pump
+Use your broader multilingual knowledge to handle any regional terms not listed above.
 
 Examples:
-"mujhe Pampers size 2 chahiye"                                     → Pampers diaper size 2
-"baby ka langot do pack"                                           → cloth nappy 2 pack
-"um daant nikal rahe hain kuch dena"                               → teething gel / teething toy
-"Himalaya baby tel 200ml"                                          → Himalaya baby massage oil 200ml
-"chusni chahiye newborn ke liye"                                   → newborn pacifier soother
-"Johnson's baby shampoo no tears wala"                             → Johnson's baby shampoo no tears
-"mujhe breast pump chahiye electric"                               → electric breast pump
-"baby ko raat ko neend nahi aati kuch hai kya"                     → baby sleep aid gripe water
-"Huggies sensitive wipes ek bada pack"                             → Huggies sensitive baby wipes large pack
-"prenatal vitamins folic acid wali"                                → prenatal vitamins folic acid
-"stage 1 formula milk Nan Pro"                                     → Nan Pro stage 1 infant formula
-"feeding bottle anti colic Pigeon"                                 → Pigeon anti-colic feeding bottle
-"colic drop Woodward's"                                            → Woodward's gripe water colic drops
-"baby food 6 month apple puree"                                    → apple puree baby food 6 months
-"maternity pad delivery ke baad"                                   → maternity pad postnatal
+"mujhe Pampers size 2 chahiye" → Pampers diaper size 2
+"baby ka langot do pack" → cloth nappy 2 pack
+"um daant nikal rahe hain kuch dena" → teething gel
+"baby ko raat ko neend nahi aati" → baby sleep aid gripe water
+"Huggies sensitive wipes ek bada pack" → Huggies sensitive baby wipes large pack
+"stage 1 formula milk Nan Pro" → Nan Pro stage 1 infant formula`;
 
-Raw: ${raw}
-Cleaned:`;
+// Groq uses chat messages; Gemini takes a single string
+const buildGroqMessages = (raw) => [
+  { role: 'user', content: `${SYSTEM_PROMPT}\n\nRaw: ${raw}\nCleaned:` },
+];
+
+const buildGeminiPrompt = (raw) => `${SYSTEM_PROMPT}\n\nRaw: ${raw}\nCleaned:`;
+
+// ─── Groq call (primary — fast, ~100-200ms) ───────────────────────────────────
+async function callGroq(raw) {
+  const controller = new AbortController();
+  const timeout    = setTimeout(() => controller.abort(), 4000); // 4s timeout
+
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method  : 'POST',
+      headers : {
+        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+        'Content-Type' : 'application/json',
+      },
+      body   : JSON.stringify({
+        model       : 'llama-3.1-8b-instant',
+        messages    : buildGroqMessages(raw),
+        temperature : 0,
+        max_tokens  : 60,
+      }),
+      signal : controller.signal,
+    });
+
+    if (!res.ok) throw new Error(`Groq HTTP ${res.status}`);
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content?.trim() || raw;
+
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// ─── Gemini call (fallback) ───────────────────────────────────────────────────
+async function callGemini(raw) {
+  const result = await ai.models.generateContent({
+    model    : 'gemini-2.5-flash',
+    contents : buildGeminiPrompt(raw),
+  });
+  return (result.text ?? '').trim() || raw;
+}
+
+// ─── Clean with Groq → Gemini fallback ───────────────────────────────────────
+async function cleanQuery(raw) {
+  if (process.env.GROQ_API_KEY) {
+    try {
+      const cleaned = await callGroq(raw);
+      console.log(`[Groq]    "${raw}"  →  "${cleaned}"`);
+      return cleaned;
+    } catch (err) {
+      console.warn(`[Groq] Failed (${err.message}), falling back to Gemini`);
+    }
+  }
+  const cleaned = await callGemini(raw);
+  console.log(`[Gemini]  "${raw}"  →  "${cleaned}"`);
+  return cleaned;
+}
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname)));
@@ -102,25 +135,18 @@ app.post('/api/clean', async (req, res) => {
 
   const raw = query.trim().toLowerCase();
 
-  // Cache hit — skip Gemini entirely
+  // Cache hit — skip LLM entirely
   if (cleanCache.has(raw)) {
     console.log(`[Cache]   "${raw}"  →  "${cleanCache.get(raw)}"`);
     return res.json({ cleaned: cleanCache.get(raw) });
   }
 
   try {
-    const result  = await ai.models.generateContent({
-      model    : 'gemini-2.5-flash',
-      contents : buildPrompt(query.trim()),
-    });
-
-    const cleaned = (result.text ?? '').trim() || query.trim();
-    console.log(`[Gemini]  "${query}"  →  "${cleaned}"`);
+    const cleaned = await cleanQuery(query.trim());
     cacheSet(raw, cleaned);
     res.json({ cleaned });
-
   } catch (err) {
-    console.error('[Gemini] Error:', err.message);
+    console.error('[Clean] All providers failed:', err.message);
     res.json({ cleaned: query.trim() });
   }
 });
