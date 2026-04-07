@@ -660,12 +660,39 @@
     showErr('Voice search needs Chrome, Edge, or Safari.');
   }
 
-  let recognition       = null;
-  let isListening       = false;
-  let finalBuffer       = '';
-  let prewarmPromise    = null;   // Gemini call fired during speech
-  let prewarmQuery      = '';     // the query that prewarm was fired for
-  let prewarmTimer      = null;   // debounce timer for prewarm
+  let recognition        = null;
+  let isListening        = false;
+  let finalBuffer        = '';
+  const clientCleanCache = new Map(); // raw → gemini-cleaned, session-scoped
+
+  // ── Client-side instant query cleaner (0ms, no API call) ─────────
+  // Handles common filler + Hindi/baby terms so the user sees a clean
+  // query and real results immediately, before Gemini even responds.
+  const FILLER_RE = /\b(um+|uh+|er+|hey|hi|please|yaar|bhai|arre|mujhe|humein|chahiye|dena|laao|dikhao|show\s+me|find\s+me|can\s+you|i\s+need|i\s+want|get\s+me|search\s+for|do\s+you\s+have)\b/gi;
+
+  const HINDI_DICT = [
+    // Baby & feeding
+    [/\bdoodh\b|\bdudh\b/gi,              'milk'],
+    [/\blangot\b/gi,                      'cloth nappy'],
+    [/\bchusni\b/gi,                      'pacifier'],
+    [/\bjhula\b|\bpalna\b/gi,             'baby swing'],
+    [/\bangoch[ah]+\b/gi,                 'baby towel'],
+    [/\bdaant\b/gi,                       'teething'],
+    [/\btel\s+maalish\b|\bmalish\b/gi,    'baby massage oil'],
+    [/\bsabun\b/gi,                       'soap'],
+    [/\bbada\b/gi,                        'large'],
+    [/\bchota\b/gi,                       'small'],
+    // Hindi numbers (safe — unambiguous in voice context)
+    [/\bek\b/gi,  '1'], [/\bteen\b/gi, '3'],
+    [/\bpaanch\b/gi, '5'], [/\bchhe\b/gi, '6'],
+    [/\bsaat\b/gi, '7'], [/\baath\b/gi, '8'],
+  ];
+
+  function quickClean(raw) {
+    let q = raw;
+    HINDI_DICT.forEach(([re, en]) => { q = q.replace(re, en); });
+    return q.replace(FILLER_RE, ' ').replace(/\s+/g, ' ').replace(/[.,!?]+$/, '').trim();
+  }
 
   function buildRecognition() {
     const r = new SR();
@@ -699,21 +726,6 @@
       const display = finalBuffer + (interim ? (finalBuffer ? ' ' : '') + interim : '');
       searchInput.value = display;
       showInterim(interim);
-
-      // ── Pre-warm Gemini while user is still speaking ──────────────
-      // Debounce 500ms: if transcript stable, fire clean call early
-      const stableQuery = display.trim();
-      if (stableQuery.length > 3 && stableQuery !== prewarmQuery) {
-        clearTimeout(prewarmTimer);
-        prewarmTimer = setTimeout(() => {
-          prewarmQuery   = stableQuery;
-          prewarmPromise = fetch('/api/clean', {
-            method  : 'POST',
-            headers : { 'Content-Type': 'application/json' },
-            body    : JSON.stringify({ query: stableQuery }),
-          }).then(r => r.ok ? r.json() : null).catch(() => null);
-        }, 500);
-      }
     };
 
     // ── Silence detected — browser auto-stops ────────────────────
@@ -722,7 +734,6 @@
       setListeningStyle(false);
       setMicState('idle');
       showInterim('');
-      clearTimeout(prewarmTimer);
 
       const raw = (finalBuffer || searchInput.value).trim();
       raw ? cleanAndSearch(raw) : setStatus('ready', 'Tap the mic and speak');
@@ -758,73 +769,75 @@
   micBtn.addEventListener('click', startVoice);
 
   // ════════════════════════════════════════════════════════════════
-  //  OPTIMISTIC SEARCH — parallel Gemini + Algolia
+  //  OPTIMISTIC SEARCH — 3-tier clean + parallel Algolia
   //
-  //  Timeline:
-  //    t=0ms   speech ends  →  show skeletons + fire raw search + Gemini
-  //    t~200ms raw Algolia  →  render first results (user sees content)
-  //    t~800ms Gemini done  →  fire refined Algolia search
-  //    t~1000ms             →  silently swap to refined results
+  //  Tier 1 (0ms)    — quickClean: client JS dict strips filler/Hindi
+  //  Tier 2 (~200ms) — Algolia on quickCleaned query → first results
+  //  Tier 3 (~700ms) — Gemini refines further → swap only if different
+  //
+  //  Repeat queries skip Gemini via client + server cache.
   // ════════════════════════════════════════════════════════════════
   async function cleanAndSearch(raw) {
     setMicState('processing');
-    searchInput.value = raw;
+    const cacheKey  = raw.toLowerCase().trim();
 
-    // 1. Show skeletons immediately — don't wait for anything
-    resultsMeta.textContent = `"${raw}"`;
+    // ── Tier 1: instant client-side clean (0ms) ───────────────────
+    const quick = quickClean(raw) || raw;
+
+    // Show skeletons immediately with the already-clean query visible
+    searchInput.value       = quick;
+    resultsMeta.textContent = `"${quick}"`;
     productGrid.innerHTML   = buildSkeletons(6);
     showResults();
     setStatus('searching', `Searching…`);
 
-    // 2. Reuse prewarmed Gemini promise if query matches, else fire fresh
-    const cleanPromise = (prewarmQuery === raw && prewarmPromise)
-      ? prewarmPromise
+    // ── Client cache hit: skip Gemini + network for clean step ────
+    const cachedGemini = clientCleanCache.get(cacheKey);
+    const finalQuery   = cachedGemini ?? quick;   // best clean we have right now
+
+    // ── Tier 2: Algolia on best-available clean query (~200ms) ────
+    const firstSearchPromise = fetch(`/api/search?q=${encodeURIComponent(finalQuery)}`)
+      .then(r => r.json()).catch(() => ({ hits: [], nbHits: 0 }));
+
+    // Fire Gemini in parallel (skip if we already have a cached result)
+    const geminiPromise = cachedGemini
+      ? Promise.resolve({ cleaned: cachedGemini })
       : fetch('/api/clean', {
           method  : 'POST',
           headers : { 'Content-Type': 'application/json' },
           body    : JSON.stringify({ query: raw }),
         }).then(r => r.ok ? r.json() : null).catch(() => null);
 
-    // Reset prewarm state
-    prewarmPromise = null;
-    prewarmQuery   = '';
-
-    // 3. Fire raw Algolia search immediately in parallel
-    const rawSearchPromise = fetch(`/api/search?q=${encodeURIComponent(raw)}`)
-      .then(r => r.json()).catch(() => ({ hits: [], nbHits: 0 }));
-
-    // 4. Show raw results as soon as they land (~200ms)
-    let refinedHasLanded = false;
-    rawSearchPromise.then(data => {
-      if (!refinedHasLanded) {
-        renderHits(data.hits || [], data.nbHits || 0, raw);
+    // Show Tier 2 results as soon as Algolia responds
+    let geminiHasLanded = false;
+    firstSearchPromise.then(data => {
+      if (!geminiHasLanded) {
+        searchInput.value = finalQuery;
+        headerInput.value = finalQuery;
+        renderHits(data.hits || [], data.nbHits || 0, finalQuery);
       }
     });
 
-    // 5. Await Gemini
-    const cleanData = await cleanPromise;
-    const cleaned   = cleanData?.cleaned?.trim() || raw;
+    // ── Tier 3: Gemini response (~700ms) ─────────────────────────
+    const geminiData = await geminiPromise;
+    const geminiClean = geminiData?.cleaned?.trim() || quick;
     setMicState('idle');
 
-    if (cleaned && cleaned !== raw) {
-      // Update the input to show the refined query
-      searchInput.value = cleaned;
-      headerInput.value = cleaned;
-      resultsMeta.textContent = `"${cleaned}"`;
-      setStatus('searching', `Refining to "${cleaned}"…`);
+    if (!cachedGemini) clientCleanCache.set(cacheKey, geminiClean);
 
-      // 6. Fire refined search and swap results
+    if (geminiClean && geminiClean !== finalQuery) {
+      // Gemini found something better — fire one more Algolia search
+      searchInput.value       = geminiClean;
+      headerInput.value       = geminiClean;
+      resultsMeta.textContent = `"${geminiClean}"`;
       try {
-        const res  = await fetch(`/api/search?q=${encodeURIComponent(cleaned)}`);
+        const res  = await fetch(`/api/search?q=${encodeURIComponent(geminiClean)}`);
         const data = await res.json();
-        refinedHasLanded = true;
-        renderHits(data.hits || [], data.nbHits || 0, cleaned);
-      } catch { /* raw results stay visible */ }
-    } else {
-      // Gemini returned same query — raw results are already correct
-      searchInput.value = raw;
-      headerInput.value = raw;
+        geminiHasLanded = true;
+        renderHits(data.hits || [], data.nbHits || 0, geminiClean);
+      } catch { /* first results stay */ }
     }
+    // If geminiClean === finalQuery: first results are already correct, no extra call
 
     setStatus('ready', '');
   }
