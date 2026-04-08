@@ -171,21 +171,48 @@ async function algoliaSearch(q, page = 0) {
   return { hits: result.hits, nbHits: result.nbHits };
 }
 
+// ─── Golden Dictionary (Whitelist) ───────────────────────────────────────────
+// If ALL words in a query are in this list, we skip LLM. 
+// If ANY word is missing (like "kache"), we call LLM for refinement.
+const GOLDEN_DICTIONARY = new Set([
+  // PTypes
+  'diaper', 'diapers', 'wipe', 'wipes', 'bottle', 'bottles', 'toy', 'toys', 
+  'shoes', 'bag', 'bags', 'diaper bag', 'diaper bags', 'shampoo', 'soap', 'lotion',
+  'cream', 'oil', 'powder', 'feeding', 'pacifier', 'nipple', 'formula',
+  // Specific Samples
+  'pampers', 'huggies', 'mamaearth', 'himalaya', 'sebamed', 'chicco', 'mee mee',
+  'johnsons', 'aveeno', 'baby dove', 'mamy poko', 'mamypoko', 'libero'
+]);
+
 const HINGLISH_STOP_WORDS = new Set([
-  // Hinglish
   'yaar', 'bhai', 'mujhe', 'chahiye', 'laao', 'dikhao', 'wala', 'wali', 'ka', 'ki', 'ke', 'ko', 'se', 'mein', 'par', 'kya', 'hai', 'koi', 'kuch', 'aur', 'usko',
-  // English
   'for', 'to', 'with', 'the', 'a', 'an', 'in', 'on', 'at', 'of', 'and', 'my', 'is', 'i', 'want', 'need', 'show', 'get', 'give'
 ]);
 
 function shouldRefine(raw) {
-  const words = raw.split(/\s+/);
-  if (words.length >= 4) return true; // Anything long gets LLM
+  const normalized = raw.toLowerCase().trim().replace(/[.,!?]+$/, '');
+  const words = normalized.split(/\s+/);
+  
+  // Rule 1: Always refine conversational structure (4+ words)
+  if (words.length >= 4) return true;
 
+  // Rule 2: Trigger if ANY word matches a known stop word (conversational fluff)
   for (const w of words) {
-    if (HINGLISH_STOP_WORDS.has(w.toLowerCase())) return true;
+    if (HINGLISH_STOP_WORDS.has(w)) return true;
   }
-  return false;
+
+  // Rule 3: Whitelist check. 
+  // If ANY word is NOT in the Golden Dictionary, we trigger the LLM.
+  for (const w of words) {
+    // Basic multi-word term check (e.g. "diaper bag")
+    if (!GOLDEN_DICTIONARY.has(w)) {
+      // Check if it's part of a multi-word entry in the dict
+      const isPart = Array.from(GOLDEN_DICTIONARY).some(term => term.includes(w));
+      if (!isPart) return true; // Unrecognized word -> REFINE!
+    }
+  }
+
+  return false; // All words recognized as high-confidence English products
 }
 
 // ─── Streaming Voice Search Endpoint ──────────────────────────────────────────
