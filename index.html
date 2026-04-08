@@ -177,6 +177,63 @@
       50%      { box-shadow: 0 8px 44px rgba(181,43,92,0.38); }
     }
 
+    /* ── REFINING STATE — animated gradient sweep border ────────────
+       Shows on both search pills while LLM is improving raw results  */
+    .hero-pill.refining {
+      border: 1.5px solid transparent;
+      background:
+        linear-gradient(var(--white), var(--white)) padding-box,
+        linear-gradient(90deg, #b52b5c 0%, #ff89b5 30%, #fce4f0 50%, #ff89b5 70%, #b52b5c 100%) border-box;
+      background-size: 250% 100%;
+      animation: refineSweep 1.8s linear infinite;
+    }
+    .header-bar.refining {
+      border: 1.5px solid transparent;
+      background:
+        linear-gradient(var(--pink-bg), var(--pink-bg)) padding-box,
+        linear-gradient(90deg, #b52b5c 0%, #ff89b5 30%, #fce4f0 50%, #ff89b5 70%, #b52b5c 100%) border-box;
+      background-size: 250% 100%;
+      animation: refineSweep 1.8s linear infinite;
+    }
+    @keyframes refineSweep {
+      0%   { background-position: 100% center; }
+      100% { background-position: -150% center; }
+    }
+
+    /* ── REFINE CHIP — floating banner in results area ──────────── */
+    .refine-chip {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      font-size: 0.76rem;
+      font-weight: 500;
+      color: var(--text-2);
+      max-height: 0;
+      overflow: hidden;
+      opacity: 0;
+      padding: 0;
+      transition: max-height 0.35s ease, opacity 0.3s ease, padding 0.35s ease;
+    }
+    .refine-chip.on {
+      max-height: 48px;
+      opacity: 1;
+      padding: 2px 0 18px;
+    }
+    .refine-chip-icon { color: var(--pink); flex-shrink: 0; }
+    .refine-dots { display: flex; gap: 3px; align-items: center; margin-left: 1px; }
+    .refine-dots span {
+      width: 4px; height: 4px; border-radius: 50%;
+      background: var(--pink); opacity: 0.5;
+      animation: dotBounce 1.3s ease-in-out infinite;
+    }
+    .refine-dots span:nth-child(2) { animation-delay: 0.22s; }
+    .refine-dots span:nth-child(3) { animation-delay: 0.44s; }
+    @keyframes dotBounce {
+      0%, 70%, 100% { transform: translateY(0);    opacity: 0.4; }
+      35%            { transform: translateY(-4px); opacity: 1;   }
+    }
+
     .search-lupe { color: var(--text-3); flex-shrink: 0; transition: color 0.2s; }
     .hero-pill.listening .search-lupe { color: var(--pink); }
 
@@ -541,6 +598,16 @@
 
   <!-- ──────────────── RESULTS ──────────────────────────────────── -->
   <section class="results-section" id="resultsSection">
+
+    <!-- Refining banner — visible while LLM is improving raw results -->
+    <div class="refine-chip" id="refineChip">
+      <svg class="refine-chip-icon" width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2l2.09 6.26L20 10l-5.91 1.74L12 18l-2.09-6.26L4 10l5.91-1.74z"/>
+      </svg>
+      <span>Getting better results for you</span>
+      <span class="refine-dots"><span></span><span></span><span></span></span>
+    </div>
+
     <div class="results-topbar">
       <div>
         <div class="results-label">Search results</div>
@@ -580,6 +647,7 @@
   const resultsMeta   = document.getElementById('resultsMeta');
   const newSearchBtn  = document.getElementById('newSearchBtn');
   const logoBtn       = document.getElementById('logoBtn');
+  const refineChip    = document.getElementById('refineChip');
 
   // ════════════════════════════════════════════════════════════════
   //  LAYOUT TRANSITIONS
@@ -590,10 +658,17 @@
     resultsSection.classList.add('on');       // results fade in
   }
 
+  function setRefining(on) {
+    heroPill.classList.toggle('refining', on);
+    headerBar.classList.toggle('refining', on);
+    refineChip.classList.toggle('on', on);
+  }
+
   function resetToHero() {
     hero.classList.remove('collapsed');
     headerBar.classList.remove('visible');
     resultsSection.classList.remove('on');
+    setRefining(false);
     searchInput.value  = '';
     headerInput.value  = '';
     productGrid.innerHTML = '';
@@ -829,12 +904,13 @@
     // Show Tier 2 results as soon as Algolia responds
     let llmHasLanded = false;
     firstSearchPromise.then(data => {
-      clearSlowTimers(slowTimers);          // results are here — stop all slow messages
+      clearSlowTimers(slowTimers);
       if (!llmHasLanded) {
         searchInput.value = finalQuery;
         headerInput.value = finalQuery;
         renderHits(data.hits || [], data.nbHits || 0, finalQuery);
-        if (!cachedGemini) setStatus('searching', 'Refining results…');
+        // Show refining animation only if LLM is still in-flight
+        if (!cachedGemini) setRefining(true);
       }
     });
 
@@ -843,6 +919,7 @@
     const llmData  = await llmPromise;
     const llmClean = llmData?.cleaned?.trim() || quick;
     setMicState('idle');
+    setRefining(false);   // always clear — results are as good as they'll get
 
     if (!cachedGemini) clientCleanCache.set(cacheKey, llmClean);
 
