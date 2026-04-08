@@ -622,6 +622,9 @@
       </button>
     </div>
     <div class="product-grid" id="productGrid"></div>
+    <div style="text-align: center; margin-top: 28px;">
+      <button id="loadMoreBtn" class="new-search-btn" style="margin: 0 auto; display: none;">Load More</button>
+    </div>
   </section>
 
   <script>
@@ -648,6 +651,7 @@
   const newSearchBtn  = document.getElementById('newSearchBtn');
   const logoBtn       = document.getElementById('logoBtn');
   const refineChip    = document.getElementById('refineChip');
+  const loadMoreBtn   = document.getElementById('loadMoreBtn');
 
   // ════════════════════════════════════════════════════════════════
   //  LAYOUT TRANSITIONS
@@ -672,9 +676,11 @@
     searchInput.value  = '';
     headerInput.value  = '';
     productGrid.innerHTML = '';
+    loadMoreBtn.style.display = 'none';
     resultsMeta.textContent = '';
     interimPill.classList.remove('on');
     setStatus('ready', 'Tap the mic and speak');
+    if (activeSource) { activeSource.close(); activeSource = null; }
   }
 
   logoBtn.addEventListener('click', resetToHero);
@@ -858,98 +864,116 @@
   }
   function clearSlowTimers(timers) { timers.forEach(clearTimeout); }
 
-  // ════════════════════════════════════════════════════════════════
-  //  OPTIMISTIC SEARCH — 3-tier clean + parallel Algolia
-  //
-  //  Tier 1 (0ms)    — quickClean: client JS dict strips filler/Hindi
-  //  Tier 2 (~200ms) — Algolia on quickCleaned query → first results
-  //  Tier 3 (~200ms with Groq / ~700ms Gemini fallback) — LLM refines
-  //
-  //  Repeat queries skip LLM via client + server cache.
-  // ════════════════════════════════════════════════════════════════
+  let activeSource = null;
+  let currentSearchQuery = '';
+  let currentPage = 0;
+  let totalHitsCount = 0;
+
   async function cleanAndSearch(raw) {
+    if (activeSource) {
+      activeSource.close();
+      activeSource = null;
+    }
+
     setMicState('processing');
-    const cacheKey  = raw.toLowerCase().trim();
-
-    // ── Tier 1: instant client-side clean (0ms) ───────────────────
-    const quick = quickClean(raw) || raw;
-
-    // Show skeletons immediately with the already-clean query visible
-    searchInput.value       = quick;
-    resultsMeta.textContent = `"${quick}"`;
+    
+    // Show instant initial UI state
+    const originalQuery = raw.trim();
+    searchInput.value       = originalQuery;
+    headerInput.value       = originalQuery;
+    resultsMeta.textContent = `"${originalQuery}"`;
     productGrid.innerHTML   = buildSkeletons(6);
     showResults();
     setStatus('searching', 'Searching…');
+    setRefining(false);
+    loadMoreBtn.style.display = 'none';
 
-    // Start slow-network timers — cleared as soon as first results land
     const slowTimers = startSlowTimers();
 
-    // ── Client cache hit: skip LLM + network for clean step ───────
-    const cachedGemini = clientCleanCache.get(cacheKey);
-    const finalQuery   = cachedGemini ?? quick;
-
-    // ── Tier 2: Algolia on best-available clean query (~200ms) ────
-    const firstSearchPromise = fetch(`/api/search?q=${encodeURIComponent(finalQuery)}`)
-      .then(r => r.json()).catch(() => ({ hits: [], nbHits: 0 }));
-
-    // Fire LLM in parallel (skip if cached)
-    const llmPromise = cachedGemini
-      ? Promise.resolve({ cleaned: cachedGemini })
-      : fetch('/api/clean', {
-          method  : 'POST',
-          headers : { 'Content-Type': 'application/json' },
-          body    : JSON.stringify({ query: raw }),
-        }).then(r => r.ok ? r.json() : null).catch(() => null);
-
-    // Show Tier 2 results as soon as Algolia responds
-    let llmHasLanded = false;
-    firstSearchPromise.then(data => {
+    // Start SSE stream for immediate raw hits + background LLM processing
+    activeSource = new EventSource(`/api/voice-stream?q=${encodeURIComponent(originalQuery)}`);
+    
+    activeSource.onmessage = (event) => {
       clearSlowTimers(slowTimers);
-      if (!llmHasLanded) {
-        searchInput.value = finalQuery;
-        headerInput.value = finalQuery;
-        renderHits(data.hits || [], data.nbHits || 0, finalQuery);
-        // Show refining animation only if LLM is still in-flight
-        if (!cachedGemini) setRefining(true);
+      const data = JSON.parse(event.data);
+      
+      if (data.step === 'raw') {
+        currentSearchQuery = originalQuery;
+        currentPage = 0;
+        totalHitsCount = data.nbHits || 0;
+        
+        renderHits(data.hits || [], totalHitsCount, currentSearchQuery, false);
+        
+        if (data.isRefining) {
+          setRefining(true);
+          setStatus('searching', 'Refining results…');
+        } else {
+          setMicState('idle');
+          setStatus('ready', 'Tap the mic to search again');
+          activeSource.close();
+        }
+      } 
+      else if (data.step === 'refined') {
+        setMicState('idle');
+        setRefining(false);
+        setStatus('ready', 'Tap the mic to search again');
+        activeSource.close();
+
+        if (data.error || !data.hits) {
+          // LLM decided no changes needed or there was an error, just keep raw hits shown.
+        } else {
+          // Re-render with refined hits!
+          currentSearchQuery = data.cleaned || originalQuery;
+          currentPage = 0;
+          totalHitsCount = data.nbHits || 0;
+          searchInput.value = currentSearchQuery;
+          headerInput.value = currentSearchQuery;
+          renderHits(data.hits, totalHitsCount, currentSearchQuery, false);
+        }
       }
-    });
-
-    // ── Tier 3: /api/clean returns { cleaned, hits, nbHits } ────────
-    // Server did LLM + Algolia together — no second fetch needed.
-    const llmData  = await llmPromise;
-    const llmClean = llmData?.cleaned?.trim() || quick;
-    setMicState('idle');
-    setRefining(false);   // always clear — results are as good as they'll get
-
-    if (!cachedGemini) clientCleanCache.set(cacheKey, llmClean);
-
-    if (llmClean && llmClean !== finalQuery) {
-      // Swap to refined results returned directly from the server
-      searchInput.value       = llmClean;
-      headerInput.value       = llmClean;
-      resultsMeta.textContent = `"${llmClean}"`;
-      llmHasLanded = true;
+      else if (data.step === 'error') {
+        clearSlowTimers(slowTimers);
+        setMicState('idle');
+        setRefining(false);
+        activeSource.close();
+        productGrid.innerHTML = `<p class="no-results">Error: ${data.error}</p>`;
+        setStatus('error', data.error);
+      }
+    };
+    
+    activeSource.onerror = () => {
       clearSlowTimers(slowTimers);
-      renderHits(llmData?.hits || [], llmData?.nbHits || 0, llmClean);
-    }
-    // If llmClean === finalQuery: first results already correct, nothing to do
-
-    setStatus('ready', '');
+      if (activeSource) activeSource.close();
+      setRefining(false);
+      setMicState('idle');
+      if (productGrid.innerHTML.includes('skel-card')) {
+         productGrid.innerHTML = `<p class="no-results">Connection lost. Please try again.</p>`;
+         setStatus('error', 'Voice search stream interrupted');
+      }
+    };
   }
 
   async function handleSearch(query) {
+    if (activeSource) { activeSource.close(); activeSource = null; }
     if (!query?.trim()) { setStatus('ready', 'Tap the mic and speak'); return; }
+    
     query = query.trim();
+    currentSearchQuery = query;
+    currentPage = 0;
+    
     searchInput.value  = query;
     headerInput.value  = query;
     resultsMeta.textContent = `"${query}"`;
     productGrid.innerHTML   = buildSkeletons(6);
+    loadMoreBtn.style.display = 'none';
     showResults();
     setStatus('searching', `Searching for "${query}"…`);
+    
     try {
       const res  = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
       const data = await res.json();
-      renderHits(data.hits || [], data.nbHits || 0, query);
+      totalHitsCount = data.nbHits || 0;
+      renderHits(data.hits || [], totalHitsCount, query, false);
     } catch {
       productGrid.innerHTML = `<p class="no-results">Search failed. Check your connection.</p>`;
       setStatus('error', 'Search request failed');
@@ -960,16 +984,17 @@
   // ════════════════════════════════════════════════════════════════
   //  RENDER ALGOLIA HITS
   // ════════════════════════════════════════════════════════════════
-  function renderHits(hits, nbHits, query) {
-    productGrid.innerHTML = '';
+  function renderHits(hits, nbHits, query, append = false) {
+    if (!append) productGrid.innerHTML = '';
 
-    if (!hits.length) {
+    if (!hits.length && !append) {
       productGrid.innerHTML = `
         <p class="no-results">
           No results for <strong>"${esc(query)}"</strong>.<br>
           Try a different word or phrase.
         </p>`;
       setStatus('ready', 'No results — tap mic to try again');
+      loadMoreBtn.style.display = 'none';
       return;
     }
 
@@ -1006,12 +1031,40 @@
       productGrid.appendChild(card);
     });
 
-    const label = nbHits > hits.length
-      ? `"${query}" — ${hits.length} of ${nbHits.toLocaleString()} results`
+    const renderedCount = productGrid.querySelectorAll('.product-card').length;
+    const label = nbHits > renderedCount
+      ? `"${query}" — showing ${renderedCount} of ${nbHits.toLocaleString()} results`
       : `"${query}" — ${nbHits} result${nbHits !== 1 ? 's' : ''}`;
     resultsMeta.textContent = label;
-    setStatus('ready', 'Tap the mic to search again');
+    
+    if (renderedCount < nbHits) {
+      loadMoreBtn.style.display = 'inline-flex';
+    } else {
+      loadMoreBtn.style.display = 'none';
+    }
+
+    if (!activeSource) setStatus('ready', 'Tap the mic to search again');
   }
+
+  loadMoreBtn.addEventListener('click', async () => {
+    if (!currentSearchQuery) return;
+    currentPage++;
+    const oldHtml = loadMoreBtn.innerHTML;
+    loadMoreBtn.innerHTML = 'Loading...';
+    loadMoreBtn.disabled = true;
+
+    try {
+      const res = await fetch(`/api/search?q=${encodeURIComponent(currentSearchQuery)}&page=${currentPage}`);
+      const data = await res.json();
+      renderHits(data.hits || [], data.nbHits || 0, currentSearchQuery, true);
+    } catch (err) {
+      console.error(err);
+      currentPage--; // Revert
+    } finally {
+      loadMoreBtn.innerHTML = oldHtml;
+      loadMoreBtn.disabled = false;
+    }
+  });
 
   function buildSkeletons(n) {
     return Array.from({ length: n }, () => `

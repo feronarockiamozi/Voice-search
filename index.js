@@ -17,50 +17,17 @@ const ai  = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  GROQ PROMPT  (llama-3.1-8b-instant)
-//  Mechanical + rigid. Llama needs explicit rules and zero ambiguity.
-//  Uses system/user roles — Llama follows system instructions more strictly.
+//  Kept under 100 tokens — TTFT on llama scales with input length.
+//  Every extra token here costs real ms. No fluff, just the signal.
 // ─────────────────────────────────────────────────────────────────────────────
-const GROQ_SYSTEM = `You convert Hinglish/Hindi baby product voice queries into short English search terms.
-
-OUTPUT RULES — follow every one, no exceptions:
-1. Output MUST be English only. Zero Hindi/Urdu words allowed in the output.
-2. Remove every Hindi grammatical particle: ka ki ke ko se mein par pe ne toh bhi hi na aur phir woh yeh jo
-3. Remove ALL filler: um uh er hey please yaar bhai arre mujhe humein chahiye dena dikhao lao
-4. Translate every Hindi product word using the table below. If a Hindi word is not in the table, remove it.
-5. Keep brand names exactly (Pampers, Huggies, Himalaya, Johnson's, Pigeon, Chicco, Mamy Poko, Nan Pro).
-6. Keep size/quantity/age in English (size 2, newborn, 0-6 months, 200ml, pack of 50, large).
-7. Return ONLY the final search term — no explanation, no punctuation at the end.
-
-TRANSLATION TABLE:
-doodh / dudh    → milk
-langot          → cloth nappy
-chusni          → pacifier
-jhula / palna   → baby swing
-tel / maalish   → massage oil
-angochha        → baby towel
-daant           → teething
-bottle          → feeding bottle
-katori chamach  → weaning bowl spoon
-stan            → nursing pad
-pump            → breast pump
-bada            → large
-chota           → small
-naya            → new
-ek              → 1
-do              → 2
-teen            → 3
-char            → 4
-paanch          → 5
-
-EXAMPLES (study the particle removal carefully):
-doodh ka bottle            → milk feeding bottle
-baby ki langot do pack     → cloth nappy 2 pack
-chusni newborn ke liye     → newborn pacifier
-Pampers size 2 chahiye     → Pampers size 2
-Himalaya tel 200ml wala    → Himalaya massage oil 200ml
-Huggies wipes ek bada pack → Huggies wipes large pack
-daant nikal rahe hain      → teething gel
-Nan Pro stage 1 doodh      → Nan Pro stage 1 milk formula`;
+const GROQ_SYSTEM =
+`Baby product voice search cleaner. Output English search term only — no explanation.
+Strip filler + particles: um uh hey please yaar bhai mujhe chahiye ka ki ke ko se mein par bhi wala wali
+Translate: doodh→milk | langot→cloth nappy | chusni→pacifier | daant→teething | tel→massage oil | bada→large | ek→1 | do→2 | teen→3
+Keep brand names and sizes exactly as spoken.
+doodh ka bottle → milk feeding bottle
+baby ki langot do pack → cloth nappy 2 pack
+Pampers size 2 chahiye → Pampers size 2`;
 
 const buildGroqMessages = (raw) => [
   { role: 'system', content: GROQ_SYSTEM },
@@ -182,25 +149,98 @@ const ALGOLIA_ATTRS = [
   'avg_rating', 'rating_count', 'slug',
 ];
 
-async function algoliaSearch(q) {
+async function algoliaSearch(q, page = 0) {
   const result = await algolia.searchSingleIndex({
     indexName    : process.env.ALGOLIA_INDEX_NAME,
-    searchParams : { query: q, hitsPerPage: 9, attributesToRetrieve: ALGOLIA_ATTRS },
+    searchParams : { query: q, hitsPerPage: 10, page, attributesToRetrieve: ALGOLIA_ATTRS },
   });
   return { hits: result.hits, nbHits: result.nbHits };
 }
 
-// ─── Clean + search endpoint ──────────────────────────────────────────────────
-// Does LLM clean and Algolia search in one server round-trip.
+const HINGLISH_STOP_WORDS = new Set([
+  // Hinglish
+  'yaar', 'bhai', 'mujhe', 'chahiye', 'laao', 'dikhao', 'wala', 'wali', 'ka', 'ki', 'ke', 'ko', 'se', 'mein', 'par', 'kya', 'hai', 'koi', 'kuch', 'aur', 'usko',
+  // English
+  'for', 'to', 'with', 'the', 'a', 'an', 'in', 'on', 'at', 'of', 'and', 'my', 'is', 'i', 'want', 'need', 'show', 'get', 'give'
+]);
+
+function shouldRefine(raw) {
+  const words = raw.split(/\s+/);
+  if (words.length >= 4) return true; // Anything long gets LLM
+
+  for (const w of words) {
+    if (HINGLISH_STOP_WORDS.has(w.toLowerCase())) return true;
+  }
+  return false;
+}
+
+// ─── Streaming Voice Search Endpoint ──────────────────────────────────────────
+// One connection handles immediate raw results and delayed refined results
+app.get('/api/voice-stream', async (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform', // Bypass Vercel/Express buffering
+    'Connection': 'keep-alive'
+  });
+
+  const raw = (req.query.q || '').trim();
+  if (!raw) {
+    res.write(`data: ${JSON.stringify({ step: 'error', error: 'Empty query' })}\n\n`);
+    return res.end();
+  }
+
+  // 1. Backend evaluates query
+  const needsRefinement = shouldRefine(raw);
+
+  // 2. Start initial raw search
+  try {
+    const { hits, nbHits } = await algoliaSearch(raw, 0);
+    res.write(`data: ${JSON.stringify({ step: 'raw', hits, nbHits, isRefining: needsRefinement })}\n\n`);
+  } catch (err) {
+    console.error('[Algolia Raw] Error:', err.message);
+    res.write(`data: ${JSON.stringify({ step: 'raw', hits: [], nbHits: 0, isRefining: needsRefinement })}\n\n`);
+  }
+
+  // 3. Keep connection open and do LLM refinement if needed
+  if (needsRefinement) {
+    try {
+      // Check cache first
+      let cleaned = cleanCache.get(raw.toLowerCase());
+      if (!cleaned) {
+        cleaned = await cleanQuery(raw); // Calls Groq
+        cacheSet(raw.toLowerCase(), cleaned);
+      } else {
+        console.log(`[Cache]   "${raw}"  →  "${cleaned}"`);
+      }
+
+      // If the LLM realized it didn't need to change anything:
+      if (cleaned.toLowerCase() === raw.toLowerCase()) {
+         res.write(`data: ${JSON.stringify({ step: 'refined', hits: null, cleaned })}\n\n`);
+      } else {
+         const { hits, nbHits } = await algoliaSearch(cleaned, 0);
+         console.log(`[Algolia] Refined "${cleaned}" → ${nbHits} hits`);
+         res.write(`data: ${JSON.stringify({ step: 'refined', hits, nbHits, cleaned })}\n\n`);
+      }
+    } catch (err) {
+      console.error('[Refine] Error:', err.message);
+      // Failsafe: tell UI refinement failed, stop spinning
+      res.write(`data: ${JSON.stringify({ step: 'refined', hits: null, error: true })}\n\n`);
+    }
+  }
+
+  // End the connection gracefully
+  res.end();
+});
+
+// ─── Clean + search endpoint (Legacy, kept for backup) ────────────────────────
 // Returns { cleaned, hits, nbHits } so the client never needs a second fetch.
 app.post('/api/clean', async (req, res) => {
   const { query } = req.body ?? {};
   if (!query?.trim()) return res.json({ cleaned: '', hits: [], nbHits: 0 });
 
   const raw = query.trim().toLowerCase();
-
-  // Resolve cleaned query (cache or LLM)
   let cleaned = cleanCache.get(raw);
+  
   if (cleaned) {
     console.log(`[Cache]   "${raw}"  →  "${cleaned}"`);
   } else {
@@ -213,10 +253,8 @@ app.post('/api/clean', async (req, res) => {
     }
   }
 
-  // Search Algolia server-side (fast — same cloud, no extra client round-trip)
   try {
-    const { hits, nbHits } = await algoliaSearch(cleaned);
-    console.log(`[Algolia]  "${cleaned}"  →  ${nbHits} hits`);
+    const { hits, nbHits } = await algoliaSearch(cleaned, 0);
     res.json({ cleaned, hits, nbHits });
   } catch (err) {
     console.error('[Algolia] Error:', err.message);
@@ -224,14 +262,15 @@ app.post('/api/clean', async (req, res) => {
   }
 });
 
-// ─── Algolia search endpoint (used for the fast raw/quick query) ──────────────
+// ─── Algolia search endpoint (used for the fast raw/quick query & pagination) ─
 app.get('/api/search', async (req, res) => {
   const q = (req.query.q || '').trim();
+  const page = parseInt(req.query.page) || 0;
   if (!q) return res.json({ hits: [], nbHits: 0 });
 
   try {
-    const { hits, nbHits } = await algoliaSearch(q);
-    console.log(`[Algolia]  "${q}"  →  ${nbHits} hits`);
+    const { hits, nbHits } = await algoliaSearch(q, page);
+    console.log(`[Algolia]  "${q}" (page ${page}) →  ${nbHits} hits`);
     res.json({ hits, nbHits });
   } catch (err) {
     console.error('[Algolia] Error:', err.message);
