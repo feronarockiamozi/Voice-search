@@ -21,13 +21,27 @@ const ai  = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 //  Every extra token here costs real ms. No fluff, just the signal.
 // ─────────────────────────────────────────────────────────────────────────────
 const GROQ_SYSTEM =
-`Baby product voice search cleaner. Output English search term only — no explanation.
-Strip filler + particles: um uh hey please yaar bhai mujhe chahiye ka ki ke ko se mein par bhi wala wali
-Translate: doodh→milk | langot→cloth nappy | chusni→pacifier | daant→teething | tel→massage oil | bada→large | ek→1 | do→2 | teen→3
-Keep brand names and sizes exactly as spoken.
-doodh ka bottle → milk feeding bottle
-baby ki langot do pack → cloth nappy 2 pack
-Pampers size 2 chahiye → Pampers size 2`;
+`Expert Baby & Maternity e-commerce search optimizer. Convert raw Hinglish/English audio into precise English keywords.
+- RULES:
+1. Strip all conversational filler & Hindi particles (yaar, bhai, mujhe, chahiye, dena, dikhao, humein, ko, se, mein, wala, wali, arre, um, uh).
+2. Intent Mapping (Don't over-refine, keep it generic unless a specific symptom is mentioned):
+   - "daant" / "teething" -> teething toys/gel
+   - "colic" / "gas" / "pet dard" -> gripe water
+   - "nishan" / "marks" -> stretch mark cream
+   - "delivery ke baad" -> postnatal care
+   - "doodh pilane ke liye" -> nursing pads
+   - "rash" -> diaper rash cream
+3. Brand Correction: Recognize and fix phonetic misspellings for: Mamaearth, Himalaya, Sebamed, MamyPoko Pants, Pampers, Huggies, Libero, Chicco, Mother Sparsh, Prega News, Bio-Oil.
+4. Translations: doodh->milk, langot->cloth nappy, chusni->pacifier, jhula->cradle, tel->oil, bada->large, ek->1, do->2, teen->3.
+5. Format: Return ONLY the English search term. No quotes, intro, or explanation.
+
+EXAMPLES:
+"baby ko gas ho rahi hai" -> baby colic gripe water
+"delivery ke baad vitamins chaiye" -> postnatal vitamins
+"Mamma Earth tea tree facewash" -> Mamaearth tea tree facewash
+"stretch marks wali cream" -> stretch mark cream
+"Sebamed baby bath liquid" -> Sebamed baby wash
+"doodh ka bottle 160ml" -> milk feeding bottle 160ml`;
 
 const buildGroqMessages = (raw) => [
   { role: 'system', content: GROQ_SYSTEM },
