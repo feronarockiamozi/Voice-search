@@ -215,62 +215,42 @@ function shouldRefine(raw) {
   return false; // All words recognized as high-confidence English products
 }
 
-// ─── Streaming Voice Search Endpoint ──────────────────────────────────────────
-// One connection handles immediate raw results and delayed refined results
+// ─── Voice Search Endpoint ────────────────────────────────────────────────────
+// Decides if query needs LLM refinement, runs search once, returns final results.
 app.get('/api/voice-stream', async (req, res) => {
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache, no-transform', // Bypass Vercel/Express buffering
-    'Connection': 'keep-alive'
-  });
-
   const raw = (req.query.q || '').trim();
-  if (!raw) {
-    res.write(`data: ${JSON.stringify({ step: 'error', error: 'Empty query' })}\n\n`);
-    return res.end();
-  }
+  if (!raw) return res.json({ error: 'Empty query', hits: [], nbHits: 0 });
 
-  // 1. Backend evaluates query
-  const needsRefinement = shouldRefine(raw);
+  let queryToSearch = raw;
+  let wasRefined    = false;
 
-  // 2. Start initial raw search
-  try {
-    const { hits, nbHits } = await algoliaSearch(raw, 0);
-    res.write(`data: ${JSON.stringify({ step: 'raw', hits, nbHits, isRefining: needsRefinement })}\n\n`);
-  } catch (err) {
-    console.error('[Algolia Raw] Error:', err.message);
-    res.write(`data: ${JSON.stringify({ step: 'raw', hits: [], nbHits: 0, isRefining: needsRefinement })}\n\n`);
-  }
-
-  // 3. Keep connection open and do LLM refinement if needed
-  if (needsRefinement) {
+  if (shouldRefine(raw)) {
     try {
-      // Check cache first
       let cleaned = cleanCache.get(raw.toLowerCase());
       if (!cleaned) {
-        cleaned = await cleanQuery(raw); // Calls Groq
+        cleaned = await cleanQuery(raw);
         cacheSet(raw.toLowerCase(), cleaned);
       } else {
         console.log(`[Cache]   "${raw}"  →  "${cleaned}"`);
       }
-
-      // If the LLM realized it didn't need to change anything:
-      if (cleaned.toLowerCase() === raw.toLowerCase()) {
-         res.write(`data: ${JSON.stringify({ step: 'refined', hits: null, cleaned })}\n\n`);
-      } else {
-         const { hits, nbHits } = await algoliaSearch(cleaned, 0);
-         console.log(`[Algolia] Refined "${cleaned}" → ${nbHits} hits`);
-         res.write(`data: ${JSON.stringify({ step: 'refined', hits, nbHits, cleaned })}\n\n`);
+      if (cleaned.toLowerCase() !== raw.toLowerCase()) {
+        queryToSearch = cleaned;
+        wasRefined    = true;
       }
     } catch (err) {
       console.error('[Refine] Error:', err.message);
-      // Failsafe: tell UI refinement failed, stop spinning
-      res.write(`data: ${JSON.stringify({ step: 'refined', hits: null, error: true })}\n\n`);
+      // Fall through: search with raw query
     }
   }
 
-  // End the connection gracefully
-  res.end();
+  try {
+    const { hits, nbHits } = await algoliaSearch(queryToSearch, 0);
+    console.log(`[Algolia] "${queryToSearch}" → ${nbHits} hits`);
+    res.json({ query: queryToSearch, hits, nbHits, wasRefined });
+  } catch (err) {
+    console.error('[Algolia] Error:', err.message);
+    res.status(500).json({ error: err.message, hits: [], nbHits: 0 });
+  }
 });
 
 // ─── Clean + search endpoint (Legacy, kept for backup) ────────────────────────
