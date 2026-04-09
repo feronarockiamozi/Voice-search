@@ -17,31 +17,70 @@ const ai  = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  GROQ PROMPT  (llama-3.1-8b-instant)
-//  Kept under 100 tokens — TTFT on llama scales with input length.
-//  Every extra token here costs real ms. No fluff, just the signal.
+//  Budget: Groq is hard-capped at 500ms. Input length has negligible effect on
+//  TTFT for instant models (~750 tok/s), so we can afford comprehensive rules.
+//  8B models rely heavily on few-shot examples — keep those diverse & precise.
 // ─────────────────────────────────────────────────────────────────────────────
 const GROQ_SYSTEM =
-`Expert Baby & Maternity e-commerce search optimizer. Convert raw Hinglish/English audio into precise English keywords.
-- RULES:
-1. Strip all conversational filler & Hindi particles (yaar, bhai, mujhe, chahiye, dena, dikhao, humein, ko, se, mein, wala, wali, arre, um, uh).
-2. Intent Mapping (Don't over-refine, keep it generic unless a specific symptom is mentioned):
-   - "daant" / "teething" -> teething toys/gel
-   - "colic" / "gas" / "pet dard" -> gripe water
-   - "nishan" / "marks" -> stretch mark cream
-   - "delivery ke baad" -> postnatal care
-   - "doodh pilane ke liye" -> nursing pads
-   - "rash" -> diaper rash cream
-3. Brand Correction: Recognize and fix phonetic misspellings for: Mamaearth, Himalaya, Sebamed, MamyPoko Pants, Pampers, Huggies, Libero, Chicco, Mother Sparsh, Prega News, Bio-Oil.
-4. Translations: doodh->milk, langot->cloth nappy, chusni->pacifier, jhula->cradle, tel->oil, bada->large, ek->1, do->2, teen->3.
-5. Format: Return ONLY the English search term. No quotes, intro, or explanation.
+`Baby & maternity e-commerce search optimizer (Pakistan market). Input: raw Hinglish/English voice transcript. Output: clean English product keywords only — no explanation, no quotes, no punctuation.
+
+STRIP all Hindi/Urdu particles and filler (never include in output):
+ko ka ki ke se mein par hai hain ne mujhe humein chahiye laao dikhao dena wala wali yaar bhai arre um uh please "show me" "i want" "give me" need looking
+
+TRANSLATE (Hindi/Urdu → English):
+doodh→milk, langot→cloth nappy, chusni→pacifier, jhula→baby swing, tel→oil, maalish→massage, bada→large, chota→small, ek→1, do→2, teen→3, char→4, stan→breast, angochha→towel, topi→cap, jurab→socks, khilona→toy, gadda→mattress, takiya→pillow, razai→blanket, kapda→cloth, pani→water, sabun→soap, talc→powder
+
+SYMPTOMS → PRODUCTS:
+gas/colic/pet dard/pet phoolna → baby colic gripe water
+teething/daant/daant nikalna → teething gel
+rash/bottom laal/nappy rash → diaper rash cream
+neend nahi/raat rota/so nahi raha → baby sleep aid
+khansi/cough → baby cough syrup
+bukhar/fever → baby fever paracetamol
+ulti/vomiting → gripe water
+cradle cap/sir pe chilka → cradle cap shampoo
+stretch marks/nishan → stretch mark cream
+delivery ke baad → postnatal
+doodh nahi aa raha/breastfeed problem → lactation supplement
+diaper bahut geela → overnight diaper night pants
+
+BRAND CORRECTIONS (phonetic → correct):
+mamma earth / mama earth → Mamaearth
+seba med / sibamed → Sebamed
+mamy poko / mami poko / mammy poko → MamyPoko Pants
+hugges / huges / hugies → Huggies
+pamper / pampars → Pampers
+himalya / himlaya → Himalaya
+mother spash / mother sparsh → Mother Sparsh
+chicko / chico → Chicco
+bio oil / biooil → Bio-Oil
+prega news / pregnanews → Prega News
+nan pro / nanpro → Nan Pro
+lacto jen / lactogen → Lactogen
+
+PRESERVE exactly: brand names, sizes (ml g kg oz), age ranges (0-6m 6-12m), stage numbers (stage 1 2 3), pack counts, variants (sensitive organic extra-care unscented)
 
 EXAMPLES:
-"baby ko gas ho rahi hai" -> baby colic gripe water
-"delivery ke baad vitamins chaiye" -> postnatal vitamins
-"Mamma Earth tea tree facewash" -> Mamaearth tea tree facewash
-"stretch marks wali cream" -> stretch mark cream
-"Sebamed baby bath liquid" -> Sebamed baby wash
-"doodh ka bottle 160ml" -> milk feeding bottle 160ml`;
+baby ko gas ho rahi hai → baby colic gripe water
+mujhe Pampers size 2 chahiye → Pampers diaper size 2
+doodh ka bottle 160ml → milk feeding bottle 160ml
+Mamma Earth tea tree facewash → Mamaearth tea tree face wash
+daant nikal rahe hain kuch do → teething gel
+delivery ke baad belly tight karna → postpartum belly belt
+Huggies sensitive wipes ek bada pack → Huggies sensitive baby wipes large pack
+Nan Pro stage 1 formula milk → Nan Pro stage 1 infant formula
+baby ko raat ko neend nahi aati → baby sleep aid
+do pack langot → cloth nappy 2 pack
+prenatal vitamins folic acid wali → prenatal vitamins folic acid
+stretch marks wali cream for tummy → stretch mark cream
+6 mahine ke baby ka khaana → stage 2 baby food 6 months
+baby massage oil Himalaya 200ml → Himalaya baby massage oil 200ml
+diaper bag backpack black color → diaper bag backpack black
+breast pump electric chahiye → electric breast pump
+baby ko bukhar hai kuch dena → baby fever paracetamol
+Sebamed baby shampoo 150 ml → Sebamed baby shampoo 150ml
+show me some baby wipes please → baby wipes
+raat ko diaper leak ho raha hai → overnight diaper pants`;
 
 const buildGroqMessages = (raw) => [
   { role: 'system', content: GROQ_SYSTEM },
@@ -81,10 +120,10 @@ Examples:
 
 const buildGeminiPrompt = (raw) => `${GEMINI_SYSTEM}\n\nRaw: ${raw}\nCleaned:`;
 
-// ─── Groq call (primary — fast, ~100-200ms) ───────────────────────────────────
+// ─── Groq call (primary — fast, ~150-250ms) ──────────────────────────────────
 async function callGroq(raw) {
   const controller = new AbortController();
-  const timeout    = setTimeout(() => controller.abort(), 4000); // 4s timeout
+  const timeout    = setTimeout(() => controller.abort(), 500); // hard cap: stay within latency budget
 
   try {
     const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -120,7 +159,9 @@ async function callGemini(raw) {
   return (result.text ?? '').trim() || raw;
 }
 
-// ─── Clean with Groq → Gemini fallback ───────────────────────────────────────
+// ─── Clean with Groq → raw fallback (Gemini only when no Groq key) ───────────
+// Groq is hard-capped at 500ms. On failure we return raw immediately rather
+// than cascading to Gemini (which can take 1-3s and blows the latency budget).
 async function cleanQuery(raw) {
   if (process.env.GROQ_API_KEY) {
     try {
@@ -128,9 +169,11 @@ async function cleanQuery(raw) {
       console.log(`[Groq]    "${raw}"  →  "${cleaned}"`);
       return cleaned;
     } catch (err) {
-      console.warn(`[Groq] Failed (${err.message}), falling back to Gemini`);
+      console.warn(`[Groq] Failed (${err.message}), using raw query`);
+      return raw; // stay within latency budget
     }
   }
+  // No Groq key configured — use Gemini
   const cleaned = await callGemini(raw);
   console.log(`[Gemini]  "${raw}"  →  "${cleaned}"`);
   return cleaned;
